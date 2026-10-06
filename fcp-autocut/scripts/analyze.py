@@ -188,6 +188,8 @@ def refs_for(sents, w_from, w_to):
 # ───────── 무음·현장음 ─────────
 
 def detect_silence(cid, words, sents, audio: Audio, cfg, fmt, duration):
+    """말 중심 컷: 받아쓴 말(단어)이 있는 곳만 남기고, 말과 말 사이는 소리가 있어도(개 짖음·잡음) 자른다.
+    단어 끝/시작은 실제 소리에 맞춰 조금만 늘려 말끝을 보호한다. 4초 넘게 말이 없는 구간(브이로그 장면)은 마커."""
     sil, sc, amb = cfg["silence"], cfg["silence_common"], cfg["ambient"]
     hop = audio.hop
     out = []
@@ -198,79 +200,75 @@ def detect_silence(cid, words, sents, audio: Audio, cfg, fmt, duration):
     for a, b in runs(active):
         if b - a < minblip:
             active[a:b] = False
-    covered = np.zeros(audio.n, dtype=bool)
-    core = np.zeros(audio.n, dtype=bool)
-    for w in words:
-        covered[audio.idx(w["s"]):audio.idx(w["e"])] = True
-        pad = (w["e"] - w["s"]) * sc["word_core_ratio"]
-        core[audio.idx(w["s"] + pad):max(audio.idx(w["e"] - pad), audio.idx(w["s"] + pad) + 1)] = True
-    # 현장음 / 숨소리
-    for a, b in runs(active):
-        overlap = covered[a:b].mean() if b > a else 0
-        if overlap > sc["ambient_word_overlap"]:
-            continue
-        length = (b - a) * hop
-        peak = float(audio.e[a:b].max())
-        if sil["cut_breaths"] and length <= sil["breath_max_sec"] and \
-                peak < audio.lv["noise_db"] + audio.lv["range_db"] * sil["breath_peak_ratio"]:
-            active[a:b] = False   # 숨소리 → 무음으로 취급
-            continue
-        if length >= amb["min_sec"]:
-            act = amb["action"]
-            reason = {"keep": f"현장음 장면 {length:.1f}초(말 없음) → 보호",
-                      "marker": f"말 없는 소리 {length:.1f}초 → 필요하면 확인"}.get(act, "")
-            out.append(cand(cid, a * hop, b * hop, "ambient", sc["ambient_conf"], reason, act))
-    quiet = ~active & ~core
-    w_starts = np.array([w["s"] for w in words]) if words else np.zeros(0)
-    w_ends = np.array([w["e"] for w in words]) if words else np.zeros(0)
-    min_sil = sil["min_silence_sec"]
-    sent_by_end = {round(x["end"], 3): x for x in sents}
-    sent_by_start = {round(x["start"], 3): x for x in sents}
-    for a, b in runs(quiet):
-        t0, t1 = a * hop, min(b * hop, duration)
-        if t1 - t0 < min_sil:
-            continue
-        before = w_ends[w_ends <= t0 + 1e-3]
-        after = w_starts[w_starts >= t1 - 1e-3]
-        prev_e = float(before.max()) if len(before) else None
-        next_s = float(after.min()) if len(after) else None
-        head = prev_e is None and not active[:a].any()
-        tail = next_s is None and not active[b:].any()
-        if prev_e is None or next_s is None:
-            if not sil["trim_head_tail"]:
-                continue
-            if head and tail:
-                # 영상 전체에 말·소리가 없음
-                out.append(cand(cid, t0, t1, "silence", sc["cut_conf"], "영상 전체가 무음", "cut",
-                                lo=t0, hi=t1))
-                continue
-            c0 = t0 if head else t0 + sil["pad_after_sec"]
-            c1 = t1 if tail else t1 - sil["pad_before_sec"]
-            where = "앞부분" if prev_e is None else "뒷부분"
+    if not words:
+        out.append(cand(cid, 0, duration, "silence", 0.6, "받아쓴 말이 없는 영상 — 장면이면 유지, 아니면 삭제", "marker"))
+        return out
+    ext = sc["word_tail_extend_sec"]
+    spans = []
+    for w in words:   # 단어 경계를 실제 소리에 맞춰 조금만 늘림
+        i, lim = audio.idx(w["e"]), audio.idx(w["e"] + ext)
+        while i < lim and i < audio.n and active[i]:
+            i += 1
+        j, lim2 = audio.idx(w["s"]), audio.idx(w["s"] - ext)
+        while j > lim2 and j > 0 and active[j - 1]:
+            j -= 1
+        spans.append((min(w["s"], j * hop), max(w["e"], i * hop)))
+    sent_end = {s["w1"]: s for s in sents}
+    sent_start = {s["w0"]: s for s in sents}
+    min_sil, min_cut = sil["min_silence_sec"], cfg["cut"]["min_cut_sec"]
+
+    def emit(c0, c1, a, b, where):
+        if c1 - c0 < min_cut:
+            return
+        a0, a1 = audio.idx(c0), audio.idx(c1)
+        loud = float(np.sum(audio.e[a0:a1] >= audio.speech_gate)) * hop
+        if loud >= sc["speechlike_min_sec"]:
+            out.append(cand(cid, c0, c1, "noise", sc["cut_conf"], f"{where} 말 없는 소리 {c1 - c0:.1f}초(잡음·개 짖음 등)",
+                            "cut", lo=round(a, 3), hi=round(b, 3)))
         else:
-            if sil["speech_context_sec"] is not None:
-                ctx = sil["speech_context_sec"]
-                if t0 - prev_e > ctx or next_s - t1 > ctx:
-                    continue   # 말하는 구간 밖(장면) → 건드리지 않음
-            if sil["max_cut_gap_sec"] is not None and t1 - t0 > sil["max_cut_gap_sec"]:
-                out.append(cand(cid, t0, t1, "silence", sc["long_gap_conf"],
-                                f"긴 무음 {t1 - t0:.1f}초 — 장면이면 유지, 아니면 삭제", "marker"))
-                continue
-            keep_think = 0.0
-            if sil["keep_think_pause_sec"]:
-                s_prev = sent_by_end.get(round(prev_e, 3))
-                s_next = sent_by_start.get(round(next_s, 3))
-                if s_prev is not None and s_next is not None:
-                    # 답변 전 생각하는 멈춤: 화자를 알면 화자가 바뀔 때만, 모르면 문장 사이마다 일부 유지
-                    known = s_prev.get("speaker") and s_next.get("speaker")
-                    if not known or s_prev["speaker"] != s_next["speaker"]:
-                        keep_think = sil["keep_think_pause_sec"]
-            c0 = t0 + sil["pad_after_sec"]
-            c1 = t1 - sil["pad_before_sec"] - keep_think
-            where = "말 사이"
-        if c1 - c0 >= cfg["cut"]["min_cut_sec"]:
-            out.append(cand(cid, c0, c1, "silence", sc["cut_conf"], f"{where} 무음 {t1 - t0:.1f}초", "cut",
-                            lo=round(t0, 3), hi=round(t1, 3)))
+            out.append(cand(cid, c0, c1, "silence", sc["cut_conf"], f"{where} 무음 {b - a:.1f}초", "cut",
+                            lo=round(a, 3), hi=round(b, 3)))
+
+    # 앞부분 / 뒷부분
+    first_s, last_e = spans[0][0], max(e for _, e in spans)
+    if sil["trim_head_tail"]:
+        if first_s >= min_sil:
+            emit(0.0, first_s - sil["pad_before_sec"], 0.0, first_s, "앞부분")
+        if duration - last_e >= min_sil:
+            emit(last_e + sil["pad_after_sec"], duration, last_e, duration, "뒷부분")
+    # 말 사이
+    cur_e = spans[0][1]
+    for k in range(1, len(words)):
+        a, b = cur_e, spans[k][0]
+        cur_e = max(cur_e, spans[k][1])
+        if b - a < min_sil:
+            continue
+        if sil["max_cut_gap_sec"] is not None and b - a > sil["max_cut_gap_sec"]:
+            out.append(cand(cid, a, b, "silence", sc["long_gap_conf"],
+                            f"말 없는 구간 {b - a:.1f}초 — 장면이면 유지, 아니면 삭제", "marker"))
+            continue
+        keep_think = 0.0
+        if sil["keep_think_pause_sec"] and (k - 1) in sent_end and k in sent_start:
+            sp, sn = sent_end[k - 1].get("speaker"), sent_start[k].get("speaker")
+            if not (sp and sn) or sp != sn:   # 답변 전 생각하는 멈춤(화자를 알면 바뀔 때만)
+                keep_think = sil["keep_think_pause_sec"]
+        emit(a + sil["pad_after_sec"], b - sil["pad_before_sec"] - keep_think, a, b, "말 사이")
+    # 현장음: 잘리지 않는 구간(장면)에 있는 말 없는 소리만 보호/표시
+    cuts = [(c["start"], c["end"]) for c in out if c["action"] == "cut"]
+    covered = np.zeros(audio.n, dtype=bool)
+    for w0, w1 in spans:
+        covered[audio.idx(w0):audio.idx(w1)] = True
+    for a, b in runs(active):
+        t0, t1 = a * hop, b * hop
+        if t1 - t0 < amb["min_sec"] or covered[a:b].mean() > sc["ambient_word_overlap"]:
+            continue
+        inside = sum(max(0.0, min(t1, c1) - max(t0, c0)) for c0, c1 in cuts)
+        if inside >= 0.5 * (t1 - t0):
+            continue
+        act = amb["action"]
+        reason = {"keep": f"현장음 장면 {t1 - t0:.1f}초(말 없음) → 보호",
+                  "marker": f"말 없는 소리 {t1 - t0:.1f}초 → 필요하면 확인"}.get(act, "")
+        out.append(cand(cid, t0, t1, "ambient", sc["ambient_conf"], reason, act))
     return out
 
 
@@ -416,6 +414,12 @@ def detect_retakes(cid, words, sents, disfl, cfg, roles, clip_pos, gid_start):
     elig = [s for s in sents if len(norm(s["text"])) >= r["min_chars"]]
     grams = {s["n"]: ngrams(s["text"], n) for s in elig}
     parent = {s["n"]: s["n"] for s in elig}
+    order_idx = {s["n"]: i for i, s in enumerate(sents)}
+    skip = {norm(x) for v in load_sectioned("fillers.txt").values() for x in v}
+
+    def stems(text):
+        """단어(어절) 앞 2글자 집합 — 조사·어미가 바뀌어도 같은 말로 보게. 군말은 뺌."""
+        return {norm(w)[:2] for w in text.split() if norm(w) and norm(w) not in skip and len(norm(w)) >= 2}
 
     def find(x):
         while parent[x] != x:
@@ -435,8 +439,39 @@ def detect_retakes(cid, words, sents, disfl, cfg, roles, clip_pos, gid_start):
             la, lb = len(norm(a["text"])), len(norm(b["text"]))
             false_start = (la < lb * r["false_start_length_ratio"] and inter / len(ga) >= r["false_start_containment"]
                            and not is_complete(a["text"], cfg))
-            if dice >= r["similarity"] or false_start:
+            reworded = False
+            near = (b["start"] - a["end"] <= r["adjacent_window_sec"]
+                    and abs(order_idx[b["n"]] - order_idx[a["n"]]) - 1 <= r["adjacent_max_between"])
+            if near and dice < r["similarity"]:
+                sa, sb = stems(a["text"]), stems(b["text"])
+                if min(len(sa), len(sb)) >= r["adjacent_min_stems"]:
+                    reworded = len(sa & sb) / min(len(sa), len(sb)) >= r["adjacent_stem_overlap"]
+            if dice >= r["similarity"] or false_start or reworded:
                 parent[find(b["n"])] = find(a["n"])
+    # 끊긴 시작 조각("오늘은…" "발리에 왔는데…") → 바로 뒤 온전한 문장과 같은 테이크 묶음으로
+    idx = {s["n"]: i for i, s in enumerate(sents)}
+    for b in elig:
+        if not is_complete(b["text"], cfg):
+            continue
+        gb = grams.get(b["n"]) or ngrams(b["text"], n)
+        i = idx[b["n"]]
+        for k in range(1, 4):
+            if i - k < 0:
+                break
+            frags = sents[i - k:i]
+            if b["start"] - frags[0]["start"] > r["fragment_window_sec"] or any(is_complete(f["text"], cfg) for f in frags):
+                break
+            joined = " ".join(f["text"] for f in frags)
+            gj = ngrams(joined, n)
+            if gj and len(norm(joined)) < len(norm(b["text"])) * 1.1 and \
+                    len(gj & gb) / len(gj) >= r["fragment_containment"]:
+                for f in frags:
+                    parent.setdefault(f["n"], f["n"])
+                    grams.setdefault(f["n"], ngrams(f["text"], n))
+                    parent[find(f["n"])] = find(b["n"])
+                    if f not in elig:
+                        elig.append(f)
+    elig.sort(key=lambda s: s["start"])
     by_root = {}
     for s in elig:
         by_root.setdefault(find(s["n"]), []).append(s)
@@ -632,7 +667,7 @@ def main():
     # 요약
     from collections import Counter
     cnt = Counter((c["type"], c["action"]) for c in all_c)
-    ko = {"silence": "무음", "ambient": "현장음", "hallucination": "받아쓰기 오류", "disfluency": "더듬기",
+    ko = {"silence": "무음", "noise": "잡음", "ambient": "현장음", "hallucination": "받아쓰기 오류", "disfluency": "더듬기",
           "filler": "군말", "retake": "반복", "offtalk": "제작 대화"}
     act = {"cut": "자르기", "marker": "마커", "keep": "보호/유지"}
     print(f"🔎 분석 끝: 문장 {next_no - 1}개, 후보 {len(all_c)}개, 반복 묶음 {len(all_g)}개")

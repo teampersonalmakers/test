@@ -23,7 +23,7 @@ from common import (FORMAT_KO, clip_envelope, data_home, die, fmt_time, ftime, l
                     project_dir, save_json, to_frames_ceil, to_frames_floor)
 
 FCP_DTD_DIR = Path("/Applications/Final Cut Pro.app/Contents/Frameworks/Interchange.framework/Versions/A/Resources")
-TYPE_KO = {"silence": "무음", "ambient": "현장음", "hallucination": "받아쓰기오류", "disfluency": "더듬기",
+TYPE_KO = {"silence": "무음", "noise": "잡음", "ambient": "현장음", "hallucination": "받아쓰기오류", "disfluency": "더듬기",
            "filler": "군말", "retake": "반복", "offtalk": "제작대화", "other": "기타 판단"}
 
 # 파이널컷 표준 포맷 이름(확실한 것만). 목록에 없으면 이름 없이 크기·프레임만 적는다(파이널컷이 사용자 지정으로 처리).
@@ -267,9 +267,10 @@ def main():
         env, _ = clip_envelope(clip, pdir, cfg)
         ctx = ClipCtx(clip, script["clips"][clip["id"]], cfg, env)
         ctx.env_hop = cfg["analysis"]["hop_sec"]
+        uncut = set(notes.get("uncut", []))   # "c12 살려줘": 자동 컷(무음·잡음) 중 되살릴 것
         for c in cands:
-            if c["clip"] == ctx.id and c["type"] == "silence" and c["action"] == "cut":
-                ctx.add(c["start"], c["end"], "silence", c["id"], "",
+            if c["clip"] == ctx.id and c["type"] in ("silence", "noise") and c["action"] == "cut" and c["id"] not in uncut:
+                ctx.add(c["start"], c["end"], c["type"], c["id"], "",
                         (c.get("lo", c["start"]), c["start"] + cfg["cut"]["snap_window_sec"]),
                         (c["end"] - cfg["cut"]["snap_window_sec"], c.get("hi", c["end"])))
         for ref in edits.get(ctx.id, []):
@@ -314,7 +315,7 @@ def main():
             if c["action"] == "marker" and not handled:
                 mk.append((c["start"], c["end"], f"{TYPE_KO.get(c['type'], c['type'])}: {c['reason']}", False, c["id"],
                            c["confidence"]))
-            elif c["action"] == "cut" and c["type"] not in ("silence", "hallucination", "ambient") and not handled:
+            elif c["action"] == "cut" and c["type"] not in ("silence", "noise", "hallucination", "ambient") and not handled:
                 refs = c.get("refs", [])
                 kn = next((keep_notes[f"{ctx.id}|{r}"] for r in refs if f"{ctx.id}|{r}" in keep_notes), None) \
                     or keep_notes.get(c["id"])
@@ -521,16 +522,21 @@ def make_report(title, fmt, probe, ctxs, per_clip, total_tl, timeline, marker_ro
     from collections import defaultdict
     by_type = defaultdict(list)
     sil_n = defaultdict(lambda: [0, 0.0])
+    noise_rows = []
     for ctx in ctxs:
         for c in ctx.cuts:
             if c["kind"] == "silence":
                 sil_n[ctx.id][0] += 1
                 sil_n[ctx.id][1] += c["t1"] - c["t0"]
+            elif c["kind"] == "noise":
+                noise_rows.append((ctx, c))
             else:
                 ty, why = ref_type(ctx.id, c["ref"])
                 by_type[ty].append((ctx, c, why))
     tot_sil = sum(v[0] for v in sil_n.values())
     R.append(f"- 무음: {tot_sil}곳 (약 {fmt_time(sum(v[1] for v in sil_n.values()))})")
+    if noise_rows:
+        R.append(f"- 잡음(말 없는 소리): {len(noise_rows)}곳")
     for ty, rows in by_type.items():
         R.append(f"- {TYPE_KO.get(ty, ty)}: {len(rows)}곳")
     # 삭제 문장 목록
@@ -542,6 +548,12 @@ def make_report(title, fmt, probe, ctxs, per_clip, total_tl, timeline, marker_ro
             pos = tl_pos(timeline, ctx, c["at"], tl_fd)
             R.append(f"- `[{c['ref']}]` {ctx.id} {fmt_time(c['at'])} (결과 {fmt_time(pos)} 부근) — "
                      f"\"{c['text'][:60]}\"" + (f" · {why}" if why else ""))
+        R.append("")
+    if noise_rows:
+        R += ["### 잡음(말 없이 소리만 있던 곳)", "> 말이었는데 잘렸다면 \"c번호 살려줘\"라고 말해 주세요.", ""]
+        for ctx, c in sorted(noise_rows, key=lambda x: (x[0]._index, x[1]["t0"])):
+            pos = tl_pos(timeline, ctx, c["t0"], tl_fd)
+            R.append(f"- `[{c['ref']}]` {ctx.id} {fmt_time(c['t0'])}~{fmt_time(c['t1'])} (결과 {fmt_time(pos)} 부근)")
         R.append("")
     # 반복 테이크
     groups = cj.get("retake_groups", [])
@@ -585,7 +597,7 @@ def make_report(title, fmt, probe, ctxs, per_clip, total_tl, timeline, marker_ro
           "- 같은 파일을 다시 가져올 때 이벤트 이름이 겹치지 않도록 다시 만들 때마다 v2, v3이 붙어요. 이전 이벤트는 지워도 돼요.",
           "- 말끝이 살짝 먹힌 곳은 클립 끝의 오디오 페이드 핸들을 살짝 끌어 짧은 페이드를 주면 자연스러워요.",
           "- 🔴 할 일 마커는 타임라인 인덱스의 '태그' 목록에서 모아 볼 수 있어요.", ""]
-    counts = {"silence": tot_sil, **{ty: len(rows) for ty, rows in by_type.items()}}
+    counts = {"silence": tot_sil, "noise": len(noise_rows), **{ty: len(rows) for ty, rows in by_type.items()}}
     return "\n".join(R), counts
 
 

@@ -79,7 +79,12 @@ common:
   retake:
     window_sec: 180            # 이 시간 안의 문장끼리만 비교
     ngram: 3                   # 글자 3개 단위로 비교
-    similarity: 0.55           # 이 이상 비슷하면 같은 내용
+    similarity: 0.45           # 이 이상 비슷하면 같은 내용(말을 조금 바꿔 다시 한 것도 잡도록)
+    adjacent_window_sec: 15    # 바로 이어서 다시 말한 경우(이 시간 안, 사이 문장 1개 이하)는 '단어 앞부분' 기준으로 느슨하게 비교
+    adjacent_stem_overlap: 0.6 # 짧은 쪽 문장 단어(앞 2글자)의 이 비율 이상이 겹치면 같은 말을 다시 한 것
+    adjacent_min_stems: 3
+    fragment_window_sec: 20    # 끊긴 시작 조각들("오늘은…" "발리에…")을 다음 온전한 문장과 묶는 범위
+    fragment_containment: 0.7
     false_start_containment: 0.7
     false_start_length_ratio: 0.7
     min_chars: 6               # 너무 짧은 문장(네, 맞아요)은 비교 안 함
@@ -102,6 +107,8 @@ common:
     word_dominance_db: 3       # 분리 녹음에서 단어마다 좌/우 중 이만큼 큰 쪽을 화자로
 
   silence_common:
+    word_tail_extend_sec: 0.25 # 말 중심 컷: 받아쓴 단어 끝/시작을 실제 소리에 맞춰 최대 이만큼만 늘림(말끝 보호, 뒤 잡음은 포함 안 함)
+    speechlike_min_sec: 0.6    # 잘린 '말 사이' 구간에 큰 소리가 이만큼 있으면 '잡음' 컷으로 따로 표시(개 짖음·차 소리 등)
     word_core_ratio: 0.25      # 받아쓴 단어의 가운데 부분(앞뒤 25% 제외)은 무음이어도 자르지 않음(작게 말한 말끝 보호)
     long_gap_conf: 0.6
     cut_conf: 0.95
@@ -157,9 +164,9 @@ vlog:
     cut_breaths: false
     breath_max_sec: 0.7
     breath_peak_ratio: 0.6
-  ambient: {min_sec: 1.5, action: keep}   # 요리·거리·파도 소리 보호
+  ambient: {min_sec: 1.5, action: keep}   # 말 없는 '장면'(4초 넘는 구간)의 현장음만 보호. 말 사이 잡음은 자름
   disfluency: {mode: cut}
-  retake: {mode: edges, edge_sec: 90, middle_penalty: 0.1}   # 오프닝·마무리 위주
+  retake: {mode: edges, edge_sec: 90, middle_penalty: 0}     # 사용자 피드백: 중간 반복도 앞 테이크는 자름
   offtalk: {mode: cut_keep_reactions}
 
 interview:

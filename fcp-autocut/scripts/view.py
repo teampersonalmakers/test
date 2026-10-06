@@ -15,7 +15,7 @@ import argparse
 
 from common import FORMAT_KO, die, fmt_time, load_json, project_dir, save_json
 
-TYPE_KO = {"silence": "무음", "ambient": "현장음", "hallucination": "받아쓰기오류", "disfluency": "더듬기",
+TYPE_KO = {"silence": "무음", "noise": "잡음", "ambient": "현장음", "hallucination": "받아쓰기오류", "disfluency": "더듬기",
            "filler": "군말", "retake": "반복", "offtalk": "제작대화"}
 ACT = {"cut": "✂ 자르기", "marker": "📍 마커", "keep": "🛡 유지"}
 
@@ -63,7 +63,7 @@ def main():
         if args.focus:
             hot = set()
             for c in cands:
-                if c["clip"] != cid or c["type"] in ("silence", "ambient"):
+                if c["clip"] != cid or c["type"] in ("silence", "noise", "ambient"):
                     continue
                 for k, s in enumerate(sents_v):
                     if s["start"] < c["end"] + 0.01 and s["end"] > c["start"] - 0.01:
@@ -86,11 +86,11 @@ def main():
         for c in cc:
             if c["end"] < lo_t or c["start"] > hi_t:
                 continue
-            if args.focus and c["type"] in ("silence", "ambient", "hallucination"):
+            if args.focus and c["type"] in ("silence", "noise", "ambient", "hallucination"):
                 continue
             if c["type"] == "silence" and c["action"] == "cut" and not args.show_silence and c["end"] - c["start"] < 1.0:
                 continue
-            events.append((c["start"], 0 if c["type"] in ("silence", "ambient", "hallucination") else 2, "c", c))
+            events.append((c["start"], 0 if c["type"] in ("silence", "noise", "ambient", "hallucination") else 2, "c", c))
         events.sort(key=lambda e: (e[0], e[1]))
         prev_n = None
         for t, _, kind, obj in events:
@@ -108,8 +108,8 @@ def main():
             else:
                 c = obj
                 ty = TYPE_KO.get(c["type"], c["type"])
-                if c["type"] in ("silence", "ambient"):
-                    print(f"   {'···' if c['type'] == 'silence' else '♪'} {c['id']} {fmt_time(c['start'])}–"
+                if c["type"] in ("silence", "noise", "ambient"):
+                    print(f"   {'♪' if c['type'] == 'ambient' else '···'} {c['id']} {fmt_time(c['start'])}–"
                           f"{fmt_time(c['end'])} {ty} {ACT[c['action']]} | {c['reason']}")
                 elif c["type"] == "hallucination":
                     print(f"   🚫 {c['id']} {ty} {ACT[c['action']]} | {c['reason']}")
@@ -135,14 +135,14 @@ def show_groups(groups):
 def suggest(pdir, cands, groups):
     edits, reasons = {}, {}
     for c in cands:
-        if c["action"] != "cut" or c["type"] in ("silence", "hallucination", "ambient"):
+        if c["action"] != "cut" or c["type"] in ("silence", "noise", "hallucination", "ambient"):
             continue
         for r in c.get("refs", []):
             lst = edits.setdefault(c["clip"], [])
             if r not in lst:
                 lst.append(r)
             reasons[f"{c['clip']}|{r}"] = {"type": c["type"], "reason": c["reason"], "cand": c["id"]}
-    notes = {"reasons": reasons, "keep": {}, "dismiss": [], "markers": [], "retake_choices": [], "questions": []}
+    notes = {"reasons": reasons, "keep": {}, "dismiss": [], "uncut": [], "markers": [], "retake_choices": [], "questions": []}
     save_json(pdir / "edits.draft.json", edits)
     save_json(pdir / "notes.draft.json", notes)
     n = sum(len(v) for v in edits.values())

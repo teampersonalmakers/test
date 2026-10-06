@@ -20,7 +20,7 @@ from datetime import datetime
 
 from common import FORMAT_KO, data_home, die, load_json, project_dir
 
-TYPE_KO = {"silence": "무음", "disfluency": "더듬기", "filler": "군말", "retake": "반복", "offtalk": "제작대화",
+TYPE_KO = {"silence": "무음", "noise": "잡음", "disfluency": "더듬기", "filler": "군말", "retake": "반복", "offtalk": "제작대화",
            "other": "기타 판단"}
 # 유형별로 되살림이 많을 때 손볼 설정(presets.yaml)
 HINT = {
@@ -29,6 +29,7 @@ HINT = {
     "filler": "fillers.txt 의 [확실] 에서 자주 되살린 말을 [애매]로 옮기기",
     "offtalk": "offtalk.txt 에서 자주 되살린 키워드 빼기",
     "silence": "해당 포맷 silence.pad_before_sec / pad_after_sec 늘리기",
+    "noise": "silence_common.speechlike_min_sec 올리기 또는 word_tail_extend_sec 늘리기(말 같은 소리를 덜 자름)",
 }
 
 
@@ -53,6 +54,11 @@ def lookup(title, refs):
     sents = {s["n"]: (cid, s) for cid, v in script["clips"].items() for s in v["sentences"]}
     out = []
     for ref in refs:
+        if re.fullmatch(r"c\d+", ref):   # 자동 컷(무음·잡음) 후보 번호
+            c = next((c for c in cj["candidates"] if c.get("id") == ref), None)
+            out.append({"ref": ref, "clip": c["clip"] if c else None, "type": c["type"] if c else "other",
+                        "text": c["reason"] if c else ""})
+            continue
         m = re.match(r"(\d+)", ref)
         if not m or int(m.group(1)) not in sents:
             out.append({"ref": ref, "type": "other", "text": ""})
