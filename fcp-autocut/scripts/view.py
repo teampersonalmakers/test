@@ -7,6 +7,7 @@
   view.py --title 제목 --clip A001          # 영상 하나
   view.py --title 제목 --suggest            # 확신도 높은 후보로 edits.draft.json / notes.draft.json 생성
   view.py --title 제목 --groups             # 반복 묶음만
+  view.py --title 제목 --focus              # 후보가 있는 문장 + 앞뒤 1문장만(긴 영상용)
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ def main():
     ap.add_argument("--clip")
     ap.add_argument("--suggest", action="store_true")
     ap.add_argument("--groups", action="store_true")
+    ap.add_argument("--focus", action="store_true", help="후보 있는 문장과 앞뒤 1문장만")
     ap.add_argument("--show-silence", action="store_true", help="짧은 무음 컷도 모두 표시")
     args = ap.parse_args()
     pdir = project_dir(args.title)
@@ -58,6 +60,15 @@ def main():
                 continue
         else:
             sents_v = sents
+        if args.focus:
+            hot = set()
+            for c in cands:
+                if c["clip"] != cid or c["type"] in ("silence", "ambient"):
+                    continue
+                for k, s in enumerate(sents_v):
+                    if s["start"] < c["end"] + 0.01 and s["end"] > c["start"] - 0.01:
+                        hot.update({k - 1, k, k + 1})
+            sents_v = [s for k, s in enumerate(sents_v) if k in hot]
         lv = cj["levels"].get(cid, {})
         print(f"\n━━ [영상 {ci}/{nclips}] {cid}  ({fmt_time(clip['duration'])}, 오디오: {clip['channel']['reason']}, "
               f"배경 {lv.get('noise_db', '?')}dB / 말소리 {lv.get('speech_db', '?')}dB) ━━")
@@ -68,20 +79,25 @@ def main():
         hi_t = sents_v[-1]["end"] + 0.01 if sents_v else clip["duration"]
         if not (args.n_from or args.n_to):
             lo_t, hi_t = -1, clip["duration"] + 1
+        shown = {s["n"] for s in sents_v}
         events = []
         for s in sents_v:
             events.append((s["start"], 1, "s", s))
         for c in cc:
             if c["end"] < lo_t or c["start"] > hi_t:
                 continue
+            if args.focus and c["type"] in ("silence", "ambient", "hallucination"):
+                continue
             if c["type"] == "silence" and c["action"] == "cut" and not args.show_silence and c["end"] - c["start"] < 1.0:
                 continue
             events.append((c["start"], 0 if c["type"] in ("silence", "ambient", "hallucination") else 2, "c", c))
         events.sort(key=lambda e: (e[0], e[1]))
-        cur_sent = None
+        prev_n = None
         for t, _, kind, obj in events:
             if kind == "s":
-                cur_sent = obj
+                if args.focus and prev_n is not None and obj["n"] - prev_n > 1:
+                    print(f"   … ({obj['n'] - prev_n - 1}문장 생략)")
+                prev_n = obj["n"]
                 spk = f" {obj['speaker']}" if obj.get("speaker") else ""
                 print(f"[{obj['n']}] {fmt_time(obj['start'])}{spk}  {obj['text']}")
                 has_word_cand = any(c["start"] < obj["end"] and c["end"] > obj["start"] and

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from common import (die, envelope, has_hangul, levels, load_json, load_presets, load_sectioned,
+from common import (clip_envelope, die, has_hangul, levels, load_json, load_presets, load_sectioned,
                     load_wordlist, norm, project_dir, runs, save_json)
 
 
@@ -224,6 +224,8 @@ def detect_silence(cid, words, sents, audio: Audio, cfg, fmt, duration):
     w_starts = np.array([w["s"] for w in words]) if words else np.zeros(0)
     w_ends = np.array([w["e"] for w in words]) if words else np.zeros(0)
     min_sil = sil["min_silence_sec"]
+    sent_by_end = {round(x["end"], 3): x for x in sents}
+    sent_by_start = {round(x["start"], 3): x for x in sents}
     for a, b in runs(quiet):
         t0, t1 = a * hop, min(b * hop, duration)
         if t1 - t0 < min_sil:
@@ -256,9 +258,13 @@ def detect_silence(cid, words, sents, audio: Audio, cfg, fmt, duration):
                 continue
             keep_think = 0.0
             if sil["keep_think_pause_sec"]:
-                s_prev = next((s for s in sents if abs(s["end"] - prev_e) < 1e-3), None)
-                if s_prev is not None:   # 문장 사이 멈춤 → 생각하는 시간 일부 유지
-                    keep_think = sil["keep_think_pause_sec"]
+                s_prev = sent_by_end.get(round(prev_e, 3))
+                s_next = sent_by_start.get(round(next_s, 3))
+                if s_prev is not None and s_next is not None:
+                    # 답변 전 생각하는 멈춤: 화자를 알면 화자가 바뀔 때만, 모르면 문장 사이마다 일부 유지
+                    known = s_prev.get("speaker") and s_next.get("speaker")
+                    if not known or s_prev["speaker"] != s_next["speaker"]:
+                        keep_think = sil["keep_think_pause_sec"]
             c0 = t0 + sil["pad_after_sec"]
             c1 = t1 - sil["pad_before_sec"] - keep_think
             where = "말 사이"
@@ -463,6 +469,9 @@ def detect_retakes(cid, words, sents, disfl, cfg, roles, clip_pos, gid_start):
             between = abs(order.index(nxt["n"]) - order.index(s["n"])) - 1
             adjacent = between <= r["adjacent_max_between"]
             conf = r["conf_adjacent"] if adjacent else r["conf_distant"]
+            short = len(norm(s["text"])) < r["short_chars"] and is_complete(s["text"], cfg)
+            if short:   # 짧고 끝맺은 말의 반복은 리액션/강조일 수 있음 → 자르지 않음
+                conf = min(conf, r["conf_distant"])
             mode = r.get("mode", "all")
             if mode == "edges":
                 edge = r["edge_sec"]
@@ -473,6 +482,8 @@ def detect_retakes(cid, words, sents, disfl, cfg, roles, clip_pos, gid_start):
             act = action_for(conf, cfg)
             reason = ("바로 이어서 같은 말 반복" if adjacent else "같은 내용을 다시 말함") + \
                       f" — {scored.index(keep) + 1}/{len(scored)}번째 테이크를 남김"
+            if short:
+                reason += " (짧은 말이라 리액션일 수 있어 확인)"
             if not is_complete(s["text"], cfg):
                 reason += " (이 테이크는 말이 끊김)"
             if mode == "host_only" and roles.get(s.get("speaker") or "", "") != "host" and act == "cut":
@@ -573,7 +584,7 @@ def main():
             script[cid] = {"words": [], "sentences": []}
             clips_data.append({"id": cid, "sents": [], "duration": clip["duration"]})
             continue
-        env = envelope(Path(clip["path"]), pdir, cid, cfg, stereo=mode in ("split", "one_side"))
+        _, env = clip_envelope(clip, pdir, cfg)
         audio = Audio(env, mode, clip["channel"].get("use_channel"), cfg)
         lv = audio.lv | {"threshold_db": audio.thr}
         if lv["range_db"] < cfg["analysis"]["min_dynamic_range_db"]:

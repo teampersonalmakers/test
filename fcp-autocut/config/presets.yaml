@@ -84,6 +84,7 @@ common:
     false_start_length_ratio: 0.7
     min_chars: 6               # 너무 짧은 문장(네, 맞아요)은 비교 안 함
     adjacent_max_between: 1    # 사이에 낀 문장이 이 이하면 "바로 이어서 반복"
+    short_chars: 10            # 이보다 짧은 문장의 반복("진짜 맛있어요. 진짜 맛있어요.")은 리액션일 수 있어 자르지 않고 마커
     conf_adjacent: 0.85
     conf_distant: 0.6
     prefer_earlier_margin: 0.15   # 앞 테이크 점수가 이만큼 높아야 앞 테이크 선택
@@ -116,6 +117,7 @@ common:
 
   markers:
     max_name_chars: 40
+    max_todo_per_min: 2        # 결과 1분당 🔴 할 일 마커 상한(넘으면 확신도 높은 것만 꽂고 나머지는 리포트에만)
 
   youtube:
     audio_format: "bestaudio[ext=m4a]/bestaudio"

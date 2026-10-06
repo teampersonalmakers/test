@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import re
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ from xml.sax.saxutils import quoteattr
 
 import numpy as np
 
-from common import (FORMAT_KO, die, envelope, fmt_time, ftime, load_json, load_presets,
+from common import (FORMAT_KO, clip_envelope, die, fmt_time, ftime, load_json, load_presets,
                     project_dir, save_json, to_frames_ceil, to_frames_floor)
 
 FCP_DTD_DIR = Path("/Applications/Final Cut Pro.app/Contents/Frameworks/Interchange.framework/Versions/A/Resources")
@@ -92,7 +93,8 @@ class ClipCtx:
         self.nframes = to_frames_floor(self.dur, self.fd)
         self.cfg = cfg
         self.env = env
-        self.cuts = []   # dict(t0, t1, lo0, hi0, lo1, hi1, kind, ref, text)
+        self.cuts = []   # dict(t0, t1, b0, b1, kind, ref, text, at)
+        self.starts = [w["s"] for w in self.words]
 
     def word_bounds(self, t):
         """t 주변에서 단어를 침범하지 않는 범위(앞 단어 끝, 뒤 단어 시작)."""
@@ -154,6 +156,19 @@ class ClipCtx:
             t1 = max(W[ib]["e"], next_s - pad)
         self.add(t0, t1, "edit", ref, text, (prev_e, W[ia]["s"]), (W[ib]["e"], next_s), at=W[ia]["s"])
 
+    def cut_ratio(self, t0, t1):
+        """[t0, t1] 중 자르기로 덮인 비율(경계 보정 전 기준)."""
+        if t1 <= t0:
+            return 1.0 if any(c["t0"] <= t0 <= c["t1"] for c in self.cuts) else 0.0
+        iv = sorted((max(c["t0"], t0), min(c["t1"], t1)) for c in self.cuts if c["t1"] > t0 and c["t0"] < t1)
+        tot, cur = 0.0, t0
+        for a, b in iv:
+            a = max(a, cur)
+            if b > a:
+                tot += b - a
+                cur = b
+        return tot / (t1 - t0)
+
     def quietest(self, t, lo, hi):
         sw = self.cfg["cut"]["snap_window_sec"]
         a, b = max(t - sw, lo), min(t + sw, hi)
@@ -205,9 +220,14 @@ class ClipCtx:
         min_keep = self.cfg["cut"]["min_keep_sec"]
         out = []
         for k0, k1 in ks:
-            t0, t1 = k0 * self.fd, k1 * self.fd
-            has_word = any(min(t1, w["e"]) - max(t0, w["s"]) > (w["e"] - w["s"]) * 0.5 for w in self.words)
-            if float(t1 - t0) < min_keep and not has_word:
+            t0, t1 = float(k0 * self.fd), float(k1 * self.fd)
+            if t1 - t0 >= min_keep:
+                out.append((k0, k1))
+                continue
+            i = bisect.bisect_right(self.starts, t1)
+            has_word = any(min(t1, w["e"]) - max(t0, w["s"]) > (w["e"] - w["s"]) * 0.5
+                           for w in self.words[max(0, i - 50):i])
+            if not has_word:
                 continue
             out.append((k0, k1))
         return out
@@ -244,12 +264,7 @@ def main():
 
     ctxs = []
     for clip in probe["clips"]:
-        env = None
-        if clip["audio"]:
-            e = envelope(Path(clip["path"]), pdir, clip["id"], cfg,
-                         stereo=clip["channel"]["mode"] in ("split", "one_side"))
-            key = {"left": "l", "right": "r"}.get(clip["channel"].get("use_channel") or "", "mono")
-            env = e.get(key, e["mono"])
+        env, _ = clip_envelope(clip, pdir, cfg)
         ctx = ClipCtx(clip, script["clips"][clip["id"]], cfg, env)
         ctx.env_hop = cfg["analysis"]["hop_sec"]
         for c in cands:
@@ -285,26 +300,28 @@ def main():
     marker_rows = []
     cut_but_kept = []
     placed = set()
+    clip_plan = []
     for ctx in ctxs:
         ks = ctx.keeps()
         kept_frames = sum(k1 - k0 for k0, k1 in ks)
         per_clip[ctx.id] = {"orig": ctx.dur, "kept": float(kept_frames * ctx.fd)}
         # 이 영상의 마커 후보
         mk = []
-        cut_refs = set(str(r) for r in edits.get(ctx.id, []))
         for c in cands:
             if c["clip"] != ctx.id or c["id"] in dismiss:
                 continue
-            if c["action"] == "marker":
-                mk.append((c["start"], c["end"], f"{TYPE_KO.get(c['type'], c['type'])}: {c['reason']}", False, c["id"]))
-            elif c["action"] == "cut" and c["type"] not in ("silence", "hallucination", "ambient"):
+            handled = ctx.cut_ratio(c["start"], c["end"]) >= 0.5   # 이미 (다른 표기로라도) 잘렸음
+            if c["action"] == "marker" and not handled:
+                mk.append((c["start"], c["end"], f"{TYPE_KO.get(c['type'], c['type'])}: {c['reason']}", False, c["id"],
+                           c["confidence"]))
+            elif c["action"] == "cut" and c["type"] not in ("silence", "hallucination", "ambient") and not handled:
                 refs = c.get("refs", [])
-                if refs and not any(r in cut_refs for r in refs):
-                    kn = next((keep_notes[f"{ctx.id}|{r}"] for r in refs if f"{ctx.id}|{r}" in keep_notes), None)
-                    if kn is None:   # 자르기 후보인데 판단 없이 남은 것 → 확인 마커
-                        mk.append((c["start"], c["end"], f"확인: {TYPE_KO.get(c['type'])} 후보를 남김 — {c['reason']}",
-                                   False, c["id"]))
-                        cut_but_kept.append(c)
+                kn = next((keep_notes[f"{ctx.id}|{r}"] for r in refs if f"{ctx.id}|{r}" in keep_notes), None) \
+                    or keep_notes.get(c["id"])
+                if kn is None:   # 자르기 후보인데 판단 없이 남은 것 → 확인 마커(조용히 남기지 않음)
+                    mk.append((c["start"], c["end"], f"확인: {TYPE_KO.get(c['type'])} 후보를 남김 — {c['reason']}",
+                               False, c["id"], 1.0))
+                    cut_but_kept.append(c)
         for m in notes.get("markers", []):
             if m.get("clip") != ctx.id:
                 continue
@@ -312,7 +329,7 @@ def main():
                 t = ctx.sents[int(m["ref"])]["start"]
             else:
                 t = float(m.get("at", 0))
-            mk.append((t, t, m.get("note", "확인"), bool(m.get("done")), "note"))
+            mk.append((t, t, m.get("note", "확인"), bool(m.get("done")), "note", 2.0))
         for g in cj["retake_groups"]:
             if g.get("clip") != ctx.id or g.get("keep") is None:
                 continue
@@ -321,12 +338,21 @@ def main():
             if kept_n in ctx.sents:
                 pos = [t["n"] for t in g["takes"]].index(kept_n) + 1 if kept_n in [t["n"] for t in g["takes"]] else "?"
                 mk.append((ctx.sents[kept_n]["start"], ctx.sents[kept_n]["end"],
-                           f"반복 {len(g['takes'])}개 중 {pos}번째 선택({g['id']})", True, g["id"]))
+                           f"반복 {len(g['takes'])}개 중 {pos}번째 선택({g['id']})", True, g["id"], 0.0))
+        clip_plan.append((ctx, ks, mk))
+    # 🔴 할 일 마커가 너무 많으면 확신도 높은 것만(내 메모·확인 마커는 항상 유지)
+    result_min = sum(float((k1 - k0) * c.fd) for c, ks, _ in clip_plan for k0, k1 in ks) / 60
+    cap = max(5, int(cfg["markers"]["max_todo_per_min"] * result_min + 0.5))
+    todo = sorted((m for _, _, mk in clip_plan for m in mk if not m[3] and m[5] < 1.0), key=lambda m: -m[5])
+    dropped = {id(m) for m in todo[cap:]}
+    overflow = [m for _, _, mk in clip_plan for m in mk if id(m) in dropped]
+    for ctx, ks, mk in clip_plan:
+        mk = [m for m in mk if id(m) not in dropped]
         for k0, k1 in ks:
             tl_dur = k1 - k0 if ctx.fd == tl_fd else max(1, round(float((k1 - k0) * ctx.fd / tl_fd)))
             markers = []
             used = set()
-            for t0, t1, name, done, src in mk:
+            for t0, t1, name, done, src, _conf in mk:
                 if src != "note" and src in placed:
                     continue
                 # 남은 구간과 겹치는 마커만, 겹친 첫 프레임에
@@ -419,7 +445,7 @@ def main():
 
     # ── 리포트 ──
     report = make_report(args.title, fmt, probe, ctxs, per_clip, cursor * tl_fd, timeline, marker_rows, cj,
-                         edits, notes, cands, cut_but_kept, tl_fd, name, version)
+                         edits, notes, cands, cut_but_kept, tl_fd, name, version, overflow)
     rep_path.write_text(report, encoding="utf-8")
     save_json(pdir / "last_build.json", {"xml": str(xml_path), "report": str(rep_path), "event": name,
                                          "orig_sec": sum(v["orig"] for v in per_clip.values()),
@@ -445,7 +471,7 @@ def tl_pos(timeline, ctx, t, tl_fd):
 
 
 def make_report(title, fmt, probe, ctxs, per_clip, total_tl, timeline, marker_rows, cj, edits, notes, cands,
-                cut_but_kept, tl_fd, event_name, version):
+                cut_but_kept, tl_fd, event_name, version, overflow=()):
     for i, c in enumerate(ctxs):
         c._index = i
     tot_o = sum(v["orig"] for v in per_clip.values())
@@ -524,6 +550,12 @@ def make_report(title, fmt, probe, ctxs, per_clip, total_tl, timeline, marker_ro
         R += ["## 마커 목록 (결과 타임라인 시각)", ""]
         for f, nm, done, cid in sorted(marker_rows):
             R.append(f"- {'🟢' if done else '🔴'} {fmt_time(float(f * tl_fd))} [{cid}] {nm}")
+        R.append("")
+    if overflow:
+        R += [f"## 마커로 꽂지 않은 확인 후보 ({len(overflow)}개)", "",
+              "> 마커가 너무 많으면 파이널컷에서 보기 힘들어 확신도 높은 것만 꽂았어요. 나머지는 여기서만 확인하세요.", ""]
+        for t0, t1, nm, done, src, conf in sorted(overflow, key=lambda m: m[0]):
+            R.append(f"- 원본 {fmt_time(t0)} · {nm} (확신도 {conf:.2f})")
         R.append("")
     # 판단 필요
     asks = [c for c in cands if c.get("ask_user")]

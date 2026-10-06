@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from common import (FORMAT_KO, clip_ids, die, ffmpeg_pcm, file_signature, frame_duration,
+from common import (FORMAT_KO, clip_ids, die, envelope, ffmpeg_pcm, file_signature, frame_duration,
                     load_json, load_presets, parse_rate, project_dir, read_batch, resolve_path, rms_db,
                     save_json, timecode_to_frames)
 
@@ -51,12 +51,14 @@ def find_timecode(info: dict) -> str | None:
     return None
 
 
-def analyze_channels(src: Path, stream_idx: int, cfg: dict) -> dict:
+def analyze_channels(src: Path, stream_idx: int, cfg: dict, pdir: Path | None = None, cid: str | None = None) -> dict:
     """좌/우가 같은 소리인지, 마이크 2개가 따로 녹음됐는지."""
     a, c = cfg["analysis"], cfg["channels"]
     sr = a["sample_rate"]
     hop = int(round(sr * a["hop_sec"]))
     pcm = ffmpeg_pcm(src, sr, 2, stream_idx)
+    if pdir is not None and stream_idx == 0:
+        envelope(src, pdir, cid, cfg, stereo=True, pcm=pcm)   # 분석 단계에서 다시 디코딩하지 않게 미리 저장
     L, R = pcm[:, 0], pcm[:, 1]
     eL, eR = rms_db(L, hop), rms_db(R, hop)
     n = min(len(eL), len(eR))
@@ -95,7 +97,7 @@ def analyze_channels(src: Path, stream_idx: int, cfg: dict) -> dict:
             "reason": f"좌우가 조금 다르지만 화자별로 나뉘진 않아요(상관 {corr:.2f}, 음량차 {diff:+.1f}dB) → 모노 취급"}
 
 
-def probe_clip(p: Path, cid: str, cfg: dict) -> dict:
+def probe_clip(p: Path, cid: str, cfg: dict, pdir: Path | None = None) -> dict:
     info = ffprobe(p)
     streams = info.get("streams", [])
     vids = [s for s in streams if s.get("codec_type") == "video"
@@ -137,7 +139,7 @@ def probe_clip(p: Path, cid: str, cfg: dict) -> dict:
         elif ch >= 2:
             if ch > 2:
                 warn.append(f"오디오 채널이 {ch}개예요. 앞의 2개(좌/우)로 판단해요.")
-            clip["channel"] = analyze_channels(p, 0, cfg)
+            clip["channel"] = analyze_channels(p, 0, cfg, pdir, cid)
     else:
         warn.append("오디오가 없어요. 이 영상은 통째로 남겨요.")
     return clip
@@ -179,7 +181,12 @@ def main():
 
     paths = read_batch(pdir)
     ids = clip_ids(paths)
-    clips = [probe_clip(p, cid, cfg) for p, cid in zip(paths, ids)]
+    prev = load_json(pdir / "probe.json")
+    if prev and not args.init and [c["path"] for c in prev["clips"]] == [str(x) for x in paths] and \
+            all(c["signature"] == file_signature(Path(c["path"])) for c in prev["clips"]):
+        clips = prev["clips"]   # 이미 확인한 영상 그대로 → 다시 읽지 않음
+    else:
+        clips = [probe_clip(p, cid, cfg, pdir) for p, cid in zip(paths, ids)]
     first = clips[0]
     tl = {k: first[k] for k in ("width", "height", "fps", "frame_duration")}
     tl["audio_rate"] = (first["audio"] or {}).get("rate", 48000)

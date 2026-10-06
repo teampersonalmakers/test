@@ -154,7 +154,7 @@ def save_json(p: Path, obj) -> None:
 
 
 def fmt_time(t: float) -> str:
-    t = max(0.0, float(t))
+    t = round(max(0.0, float(t)), 1)   # 반올림을 먼저 해야 59.96초가 "60.0초"로 보이지 않음
     m, s = divmod(t, 60)
     h, m = divmod(int(m), 60)
     return f"{h}:{m:02d}:{s:04.1f}" if h else f"{m:02d}:{s:04.1f}"
@@ -189,28 +189,40 @@ def rms_db(x: np.ndarray, hop: int) -> np.ndarray:
     return (20 * np.log10(r + 1e-9)).astype(np.float32)
 
 
-def envelope(src: Path, pdir: Path, cid: str, cfg: dict, stereo: bool = False) -> dict:
-    """소리 크기 곡선(10ms 단위 dB). 작업 폴더에 캐시."""
+def envelope(src: Path, pdir: Path, cid: str, cfg: dict, stereo: bool = False, pcm: np.ndarray | None = None) -> dict:
+    """소리 크기 곡선(10ms 단위 dB). 작업 폴더에 캐시 → 같은 영상은 한 번만 디코딩.
+    pcm을 주면(probe가 이미 읽은 소리) 디코딩 없이 캐시를 채운다."""
     a = cfg["analysis"]
     sr, hop_sec = a["sample_rate"], a["hop_sec"]
     hop = int(round(sr * hop_sec))
     sig = file_signature(src)
     key = hashlib.md5(f"{src}|{sig}|{sr}|{hop}|{stereo}".encode()).hexdigest()[:12]
     cache = pdir / "cache" / f"{cid}.{key}.npz"
-    if cache.exists():
+    if cache.exists() and pcm is None:
         z = np.load(cache)
         return {k: z[k] for k in z.files} | {"hop_sec": hop_sec}
     out = {}
     if stereo:
-        pcm = ffmpeg_pcm(src, sr, 2)
+        if pcm is None:
+            pcm = ffmpeg_pcm(src, sr, 2)
         out["l"] = rms_db(pcm[:, 0], hop)
         out["r"] = rms_db(pcm[:, 1], hop)
         out["mono"] = rms_db(pcm.mean(axis=1), hop)
     else:
-        out["mono"] = rms_db(ffmpeg_pcm(src, sr, 1)[:, 0], hop)
+        out["mono"] = rms_db((pcm if pcm is not None else ffmpeg_pcm(src, sr, 1))[:, 0], hop)
     cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(cache, **out)
     return out | {"hop_sec": hop_sec}
+
+
+def clip_envelope(clip: dict, pdir: Path, cfg: dict) -> tuple[np.ndarray | None, dict | None]:
+    """분석·컷 보정에 쓸 소리 곡선(한쪽만 녹음됐으면 그쪽 채널). 반환: (곡선, 전체 dict)"""
+    if not clip.get("audio"):
+        return None, None
+    stereo = clip["audio"]["channels"] >= 2
+    e = envelope(Path(clip["path"]), pdir, clip["id"], cfg, stereo=stereo)
+    key = {"left": "l", "right": "r"}.get(clip["channel"].get("use_channel") or "", "mono")
+    return e.get(key, e["mono"]), e
 
 
 def levels(env: np.ndarray, cfg: dict) -> dict:

@@ -35,8 +35,8 @@ fcp-autocut/
   config/vocab.txt      고유명사 사전
   config/fillers.txt    군말 사전 ([확실] / [애매])
   config/*.txt          받아쓰기 오류 문장, 감탄사, 제작 대화 키워드
-  scripts/              setup.sh probe.py transcribe.py analyze.py view.py build.py learn.py
-  tests/                합성 영상으로 검사(32개)
+  scripts/              setup.sh autocut.py(준비 한 번에) probe.py transcribe.py analyze.py view.py build.py learn.py
+  tests/                합성 영상으로 검사(37개)
 install.sh              ~/.claude/skills/fcp-autocut 으로 복사
 ```
 
