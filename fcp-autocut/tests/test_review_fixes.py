@@ -102,6 +102,6 @@ def test_folder_input_shot_time_order_and_broken_file(tmp_path, proj):
     (d / "ZZZ0001.LRF").write_bytes(b"\0" * 10)       # 포켓3 저화질 사본
     p = proj()
     r = p.run("probe.py", "--format", "vlog", "--init", str(d), "--sort-time")
-    order = [x.split("/")[-1] for x in (p.dir / "batch.txt").read_text(encoding="utf-8").split()]
+    order = [x.split("/")[-1] for x in (p.dir / "batch.txt").read_text(encoding="utf-8").splitlines() if x]
     assert order == ["ZZZ0001.MP4", "MMM0003.MP4", "AAA0002.MP4"]
     assert "BROKEN.MP4" in r.stdout and "촬영 시각순" in r.stdout
