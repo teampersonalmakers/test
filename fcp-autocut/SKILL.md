@@ -20,25 +20,30 @@ description: 파이널컷 프로 자동 가편집. 영상 파일 경로를 받�
 
 ## 준비
 
+모든 실행은 **`~/.local/share/fcp-autocut/bin/fcp`** 하나로 한다(이 형태 그대로 써야 허용 목록에 걸려 확인창이 안 뜬다.
+변수로 감싸거나 절대경로로 바꿔 쓰지 않는다).
 ```zsh
-SK="$HOME/.claude/skills/fcp-autocut"; S="${SK}/scripts"
-PY="$HOME/.local/share/fcp-autocut/venv/bin/python"
-zsh "${S}/setup.sh" --check
+~/.local/share/fcp-autocut/bin/fcp setup --check
 ```
+- 폴더 안 영상 목록: `~/.local/share/fcp-autocut/bin/fcp videos "/폴더"` (이름순, .LRF 제외)
+- 파이널컷으로 열기: `~/.local/share/fcp-autocut/bin/fcp open "/결과.fcpxml"`
+- 지난번 포맷: `~/.local/share/fcp-autocut/bin/fcp prefs` / 저장: `... prefs vlog`
+- 사용자가 영상을 **첨부(업로드)**하려다 "30MB" 오류가 났다면: 업로드가 필요 없다고 알리고, Finder에서
+  영상 선택 → **Option+Command+C**(경로 복사) → 붙여넣기를 안내한다.
 - 경로는 반드시 큰따옴표로 감싸고 `${var}` 형태로 쓴다(공백·한글 경로). 여러 경로를 다룰 땐
   `tr '\n' '\0' < batch.txt | xargs -0 ...`.
 - `NOT_READY`면 무엇이 없는지 쉬운 말로 알리고:
   - ffmpeg 없음 → "터미널에 `brew install ffmpeg`를 실행해 주세요" 안내(직접 설치하지 않음).
-  - 가상환경/패키지 없음 → **동의를 받은 뒤** `zsh "${S}/setup.sh" --install`.
+  - 가상환경/패키지 없음 → **동의를 받은 뒤** `~/.local/share/fcp-autocut/bin/fcp setup --install`.
   - 맥이 아니거나 애플 실리콘이 아니면 **중단**하고 알린다.
 
 ## 작업 순서 (가편집 요청)
 
 ### 1. 시작 전 확인 — 질문은 최소로
 사용자는 "영상 끌어다 놓기 → 컷편집해줘 → 파이널컷에서 확인"만 원한다. 묻지 않아도 되는 건 묻지 않는다.
-- **포맷**: 말했으면 그대로. 안 말했으면 `~/.local/share/fcp-autocut/prefs.json`의 `last_format`을 쓰고
+- **포맷**: 말했으면 그대로. 안 말했으면 `fcp prefs`의 `last_format`을 쓰고
   "지난번처럼 브이로그로 할게요(다르면 말씀해 주세요)"라고 한 줄만 알리고 바로 진행. 기록이 없을 때(처음)만 묻는다.
-  작업이 끝나면 `{"last_format": "<포맷>"}`을 그 파일에 저장한다.
+  작업이 끝나면 `fcp prefs <포맷>`으로 저장한다.
 - **제목**: 묻지 않는다. 첫 영상의 폴더 이름(폴더가 "Downloads"·"Desktop"·"Movies"처럼 일반적이면 첫 파일 이름)으로
   정하고 결과 보고 때 알린다.
 - **영상 목록과 순서**: 사용자가 준(끌어다 놓은) 정확한 경로 그대로 쓴다. 파일 번호로 추측(glob)하지 않는다.
@@ -50,7 +55,7 @@ zsh "${S}/setup.sh" --check
 
 ### 2~4. 준비 한 번에 (권장)
 ```zsh
-"${PY}" "${S}/autocut.py" --title "${T}" --format vlog --init "/경로/A.MP4" "/경로/B.MP4"   # [--sort-name]
+~/.local/share/fcp-autocut/bin/fcp prepare --title "${T}" --format vlog --init "/경로/A.MP4" "/경로/B.MP4"   # [--sort-name]
 ```
 영상 확인 → 받아쓰기 → 후보 계산 → 초안까지 한 번에 하고 `PREPARE_DONE`을 출력한다. 이미 끝난 단계는
 건너뛰므로 중간에 멈춰도 같은 명령(두 번째부터는 `--init` 없이)으로 이어서 실행하면 된다.
@@ -59,7 +64,7 @@ zsh "${S}/setup.sh" --check
 
 ### 2. 영상 확인
 ```zsh
-"${PY}" "${S}/probe.py" --title "${T}" --format vlog --init "/경로/A.MP4" "/경로/B.MP4"   # [--sort-name]
+~/.local/share/fcp-autocut/bin/fcp probe --title "${T}" --format vlog --init "/경로/A.MP4" "/경로/B.MP4"   # [--sort-name]
 ```
 채널 판단 결과(모노 / 좌우 분리 / 한쪽만)를 근거 수치와 함께 한두 줄로 보고한다.
 **인터뷰 + 좌우 분리**면 어느 쪽이 진행자인지 묻거나 대본을 보고 추정해 확인받은 뒤
@@ -69,7 +74,7 @@ zsh "${S}/setup.sh" --check
 
 ### 3. 받아쓰기
 ```zsh
-"${PY}" "${S}/transcribe.py" --title "${T}"
+~/.local/share/fcp-autocut/bin/fcp transcribe --title "${T}"
 ```
 - 종료 코드 3 + `NEED_MODEL_DOWNLOAD` → **"받아쓰기 모델(약 1.6GB)을 한 번 내려받아야 해요. 받을까요?"** 라고
   묻고, 동의하면 `--allow-download`를 붙여 다시 실행. 동의 없이 절대 받지 않는다.
@@ -79,15 +84,15 @@ zsh "${S}/setup.sh" --check
 
 ### 4. 후보 계산
 ```zsh
-"${PY}" "${S}/analyze.py" --title "${T}"
+~/.local/share/fcp-autocut/bin/fcp analyze --title "${T}"
 ```
 경고(배경 소음과 말소리 차이 15dB 미만 등)는 사용자에게 그대로 전달한다.
 
 ### 5. 대본 읽고 판단 (가장 중요)
 ```zsh
-"${PY}" "${S}/view.py" --title "${T}" --suggest            # 확신도 높은 후보로 초안 생성
-"${PY}" "${S}/view.py" --title "${T}" --from 1 --to 150     # 150문장씩 끝까지 전부 읽기
-"${PY}" "${S}/view.py" --title "${T}" --groups              # 반복 묶음만
+~/.local/share/fcp-autocut/bin/fcp view --title "${T}" --suggest            # 확신도 높은 후보로 초안 생성
+~/.local/share/fcp-autocut/bin/fcp view --title "${T}" --from 1 --to 150     # 150문장씩 끝까지 전부 읽기
+~/.local/share/fcp-autocut/bin/fcp view --title "${T}" --groups              # 반복 묶음만
 ```
 대본을 **처음부터 끝까지** 읽고, 초안(`edits.draft.json`, `notes.draft.json`)을 검토·수정해서
 작업 폴더에 `edits.json`, `notes.json`으로 저장한다. 초안을 그대로 복사하지 않는다.
@@ -150,13 +155,13 @@ zsh "${S}/setup.sh" --check
 
 ### 6. FCPXML 만들기
 ```zsh
-"${PY}" "${S}/build.py" --title "${T}"
+~/.local/share/fcp-autocut/bin/fcp build --title "${T}"
 ```
 - 파이널컷 앱 안의 최신 규격 파일로 검사를 통과해야만 원본 폴더에 저장된다.
 - 원본 폴더에 쓸 수 없으면(SD카드 잠금 등) `--out-dir`로 다른 폴더를 사용자에게 제안.
 
 ### 7. 파이널컷에 바로 열기 + 결과 보고
-- 만들고 나면 **바로 파이널컷으로 연다**: `open -a "Final Cut Pro" "<결과 .fcpxml 경로>"`
+- 만들고 나면 **바로 파이널컷으로 연다**: `~/.local/share/fcp-autocut/bin/fcp open "<결과 .fcpxml 경로>"`
   (파이널컷의 XML 가져오기 창이 뜨면 사용자는 보관함만 고르면 된다. 열기가 실패하면
   "파일 > 가져오기 > XML로 열어 주세요"라고 안내.)
 - 채팅 보고는 짧게(5줄 안팎):
@@ -177,14 +182,14 @@ zsh "${S}/setup.sh" --check
 
 ## 유튜브 영상으로 배우기
 사용자가 자기 유튜브 링크를 주며 분석·학습을 요청하면:
-1. 포맷을 모르면 묻는다. yt-dlp가 없으면 동의 후 `zsh "${S}/setup.sh" --youtube`.
-2. `"${PY}" "${S}/learn.py" add "<링크>" --format vlog` (화면 전환 속도까지 보려면 `--video`).
+1. 포맷을 모르면 묻는다. yt-dlp가 없으면 동의 후 `~/.local/share/fcp-autocut/bin/fcp setup --youtube`.
+2. `~/.local/share/fcp-autocut/bin/fcp learn add "<링크>" --format vlog` (화면 전환 속도까지 보려면 `--video`).
    받은 오디오는 임시로만 쓰고 지워진다. 모델 다운로드 규칙은 받아쓰기와 같다.
 3. 출력된 `VIDEO_JSON`을 읽는다(대본 `stats.text`, 직접 올린 자막 `subtitle_text`, 설명, 챕터).
 4. `~/.local/share/fcp-autocut/channel/채널노트.md`를 만들거나 갱신한다:
    주제·말투·자주 쓰는 오프닝/마무리 멘트·동행자·고유명사·편집 리듬(문장 사이 멈춤, 남겨 두는 군말)·
    이 채널에서 '살려야 하는 말'의 특징. 영상이 쌓일수록 공통점 위주로 다듬는다. 추측은 추측이라고 적는다.
-5. `"${PY}" "${S}/learn.py" summary`로 설정값 제안·고유명사 후보를 보고, **사용자에게 보여 주고 동의를 받은 뒤에만**
+5. `~/.local/share/fcp-autocut/bin/fcp learn summary`로 설정값 제안·고유명사 후보를 보고, **사용자에게 보여 주고 동의를 받은 뒤에만**
    presets.yaml / vocab.txt를 바꾼다.
 - 할 수 있는 것: 완성본의 말 리듬·멈춤 길이·남긴 군말·자주 쓰는 표현·오프닝/마무리 패턴·화면 전환 빈도.
 - 할 수 없는 것: 화면 내용(무엇이 찍혔는지) 이해, 비공개·멤버십 영상, 원본 없이 "무엇을 잘랐는지" 알아내기.

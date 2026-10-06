@@ -1,0 +1,23 @@
+#!/bin/zsh
+# fcp-autocut 명령 하나로 모으기 (Claude Code 허용 목록을 단순하게 하려고)
+#   fcp prepare|probe|transcribe|analyze|view|build|learn ...   각 스크립트 실행
+#   fcp videos <폴더>      폴더 안 영상 목록(.MP4/.MOV, 이름순 · .LRF 제외)
+#   fcp open <파일.fcpxml> 파이널컷으로 열기
+#   fcp prefs [포맷]       지난번 포맷 보기/저장
+#   fcp setup [--check|--install|--youtube|--dev]
+HOME_DIR="${FCP_AUTOCUT_HOME:-$HOME/.local/share/fcp-autocut}"
+PY="${HOME_DIR}/venv/bin/python"
+S="$HOME/.claude/skills/fcp-autocut/scripts"
+cmd="${1:-}"; shift 2>/dev/null
+case "${cmd}" in
+  prepare) exec "${PY}" "${S}/autocut.py" "$@" ;;
+  probe|transcribe|analyze|view|build|learn) exec "${PY}" "${S}/${cmd}.py" "$@" ;;
+  videos) find "${1:-.}" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' \) ! -name '._*' | sort ;;
+  open) exec open -a "Final Cut Pro" "$@" ;;
+  prefs)
+    f="${HOME_DIR}/prefs.json"
+    if [[ -n "${1:-}" ]]; then mkdir -p "${HOME_DIR}"; print -r -- "{\"last_format\": \"$1\"}" > "${f}"; fi
+    [[ -f "${f}" ]] && cat "${f}" || print '{}' ;;
+  setup) exec zsh "${S}/setup.sh" "$@" ;;
+  *) print "사용: fcp prepare|probe|transcribe|analyze|view|build|learn|videos|open|prefs|setup ..."; exit 1 ;;
+esac

@@ -3,6 +3,7 @@
 # 사용(터미널에 한 줄):
 #   zsh -c "$(curl -fsSL https://raw.githubusercontent.com/teampersonalmakers/test/claude/dazzling-archimedes-zlvnq6/mac-setup.sh)"
 # 하는 일: 필요한 도구 확인 → 스킬 내려받아 설치 → 전용 파이썬 환경·패키지 설치 → 맥에서 검사 실행
+#          → ~/가편집 전용 작업실(Claude Code 프로젝트) 만들기
 #          → 받아쓰기 모델(약 1.6GB)은 물어보고 동의할 때만 내려받음
 set -u
 BRANCH="claude/dazzling-archimedes-zlvnq6"
@@ -38,6 +39,29 @@ tar -xzf "${TMP}/src.tar.gz" -C "${TMP}" || fail "압축을 풀지 못했어요.
 SRC="$(find "${TMP}" -maxdepth 1 -type d -name 'test-*' | head -1)"
 [[ -f "${SRC}/install.sh" ]] || fail "설치 파일을 찾지 못했어요."
 zsh "${SRC}/install.sh" || fail "스킬 설치에 실패했어요."
+# 명령 하나(fcp)로 모으기
+BIN="${HOME}/.local/share/fcp-autocut/bin"
+mkdir -p "${BIN}"
+cp "${SK}/scripts/fcp" "${BIN}/fcp" && chmod +x "${BIN}/fcp"
+# 가편집 전용 작업실: 지시서 + 확인창 없이 실행되도록 허용 목록
+WS="${HOME}/가편집"
+mkdir -p "${WS}/.claude"
+cp "${SRC}/workspace/CLAUDE.md" "${WS}/CLAUDE.md"
+cat > "${WS}/.claude/settings.json" <<JSON
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.local/share/fcp-autocut/bin/fcp:*)",
+      "Bash(${BIN}/fcp:*)",
+      "Read(~/.local/share/fcp-autocut/**)",
+      "Edit(~/.local/share/fcp-autocut/**)",
+      "Read(~/.claude/skills/fcp-autocut/**)"
+    ],
+    "additionalDirectories": ["~/.local/share/fcp-autocut", "~/.claude/skills/fcp-autocut"]
+  }
+}
+JSON
+print "  ✅ 가편집 전용 작업실: ${WS}"
 rm -rf "${TMP}"
 
 # 3) 전용 파이썬 환경 + 패키지(받아쓰기·유튜브 분석·검사 도구)
@@ -77,4 +101,6 @@ else
 fi
 
 print -P "\n%F{green}%B🎉 설치 끝!%b%f"
-print "다음: 터미널에 claude 입력 → \"fcp-autocut 준비 상태 확인해줘\" 라고 말하기"
+print "다음: Claude 앱 → Code → 프로젝트 추가에서 홈 폴더의 '가편집' 폴더를 선택하세요."
+print "      그다음부터는 그 프로젝트에서 새 대화 → 영상 경로 붙여넣기만 하면 돼요."
+open "${HOME}/가편집" 2>/dev/null
