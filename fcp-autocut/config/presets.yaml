@@ -1,0 +1,179 @@
+# fcp-autocut 수치 설정
+# 코드에는 숫자를 넣지 않고 전부 여기서 읽습니다.
+# 결과가 너무 많이/적게 잘리면 이 파일 값만 바꾸고 build.py만 다시 실행하면 됩니다.
+# (silence 관련 값을 바꾸면 analyze.py → build.py 순서로 다시 실행)
+#
+# 구조: common(공통) 위에 narration / vlog / interview 값을 덮어씁니다.
+
+common:
+  analysis:
+    hop_sec: 0.01              # 소리 크기를 재는 간격(초)
+    sample_rate: 16000         # 분석용 오디오 샘플레이트
+    noise_percentile: 10       # 배경소음 = 소리 크기 하위 10%
+    speech_percentile: 95      # 말소리 = 소리 크기 상위 5%
+    min_dynamic_range_db: 15   # 말소리-배경 차이가 이보다 작으면 경고
+    speech_level_ratio: 0.5    # "말소리 수준" = 배경 + (차이 × 이 비율) 이상
+    min_blip_sec: 0.03         # 이보다 짧은 소리 튐은 무시(딸깍 소리 등)
+
+  confidence:
+    cut: 0.8                   # 이 이상: 자르기
+    marker: 0.5                # 이 이상 cut 미만: 남기고 할 일 마커 / 미만: 무시
+
+  channels:
+    mono_corr: 0.9             # 좌우 상관관계가 이 이상이고
+    mono_level_diff_db: 3      # 음량 차이가 이 이하면 → 모노 취급
+    dominance_db: 6            # 한쪽이 이만큼 크면 "그쪽이 우세한 순간"
+    split_side_min_ratio: 0.1  # 좌우 각각 우세한 순간이 이 비율 이상 → 마이크 2개 분리 녹음
+    one_side_silent_db: 20     # 한쪽이 이만큼 작으면 → 한쪽만 녹음됨(큰 쪽 사용)
+
+  transcribe:
+    model: mlx-community/whisper-large-v3-turbo
+    model_size_note: "약 1.6GB"
+    language: ko
+    chunk_minutes: 10          # 긴 영상은 이 단위로 나눠 받아쓰기(중간에 끊겨도 이어서)
+    chunk_search_sec: 20       # 나눌 지점을 찾을 때 앞뒤로 조용한 곳을 찾는 범위
+    condition_on_previous_text: false   # 환각 반복 줄이기
+    hallucination_silence_threshold: 2.0   # (지원하는 버전일 때만) 긴 무음에서 지어낸 말 건너뛰기
+    prompt_example: "어, 그러니까 음, 오늘은 그, 그 얘기를 좀, 좀 해볼게요. 어… 이제 뭐지, 약간 막 그런 느낌? 아 그래서, 그래서 이제 출발합니다."
+
+  sentence:
+    split_pause_sec: 0.6       # 이만큼 쉬면 문장을 나눔
+    max_words: 40
+    endings: ["다", "요", "죠", "까", "네", "지", "야", "어", "아", "게", "래", "니", "자", "걸", "고요", "구나", "군요", "거든"]
+
+  hallucination:
+    min_avg_prob: 0.45         # 평균 신뢰도가 이보다 낮으면 의심
+    speech_energy_ratio: 0.3   # 해당 구간에서 말소리 수준 소리가 이 비율 미만이면 "실제 말소리 약함"
+    interjection_energy_ratio: 0.1   # 감탄사는 소리가 이 정도로 거의 없을 때만 환각 처리
+    repeat_min_count: 4        # 같은 짧은 말이 이만큼 연속되면 의심
+    loop_repeat_count: 6       # 이만큼 반복되면 소리가 있어도 환각으로 봄
+    isolated_gap_sec: 1.0      # 앞뒤로 이만큼 아무 말 없는 한 단어짜리 문장 = 의심
+    max_foreign_words: 3       # 한글 없는 외국어 조각 길이 상한
+
+  disfluency:
+    gap_min_sec: 0.2           # (b) 단어 사이 빈 구간 최소 길이
+    gap_speech_ratio: 0.6      # (b) 그 구간 중 말소리 수준 소리 비율
+    low_prob: 0.4              # (c) 저신뢰 단어 기준
+    low_prob_min_words: 2      # (c) 저신뢰 단어가 이만큼 연속
+    restart_max_distance_words: 12
+    restart_pause_sec: 0.3
+    partial_max_chars: 2       # "그 그래서"처럼 앞 단어가 이 글자 수 이하이고 뒷말의 앞부분이면 끊긴 말
+    partial_pause_sec: 0.12
+    partial_low_prob: 0.5
+    restart_max_gap_sec: 5     # 문장을 넘어가는 재시작은 이 시간 안에서만
+    merge_gap_sec: 0.1         # 이만큼 가까운 더듬기 신호는 하나로 합쳐 확신도 합산
+    weak_filler_pause_sec: 0.25
+    conf:
+      strong_filler: 0.8       # 어, 음 같은 확실한 군말
+      weak_filler: 0.3         # 그, 이제, 막 같은 애매한 군말 (단독으로는 마커도 안 꽂음, 다른 신호와 겹칠 때만)
+      weak_filler_pause_bonus: 0.15
+      word_repeat: 0.7         # 같은 단어 연속
+      emphatic_repeat: 0.35    # "진짜 진짜"처럼 강조일 수 있는 반복
+      partial_restart: 0.6     # "그 그래서" ("그 그림"처럼 정상인 경우도 있어 기본은 마커)
+      partial_restart_bonus: 0.2   # 사이에 짧은 멈춤이 있거나 앞 단어 신뢰도가 낮으면 +
+      phrase_restart: 0.8      # "오늘은 방콕에 오늘은 방콕에 왔습니다"
+      energy_gap: 0.55         # 소리는 나는데 받아쓴 글자가 없는 구간
+      low_prob_cluster: 0.35
+    emphatic_words: ["진짜", "너무", "정말", "완전", "네", "예", "아니", "빨리", "많이", "좀"]
+
+  retake:
+    window_sec: 180            # 이 시간 안의 문장끼리만 비교
+    ngram: 3                   # 글자 3개 단위로 비교
+    similarity: 0.55           # 이 이상 비슷하면 같은 내용
+    false_start_containment: 0.7
+    false_start_length_ratio: 0.7
+    min_chars: 6               # 너무 짧은 문장(네, 맞아요)은 비교 안 함
+    adjacent_max_between: 1    # 사이에 낀 문장이 이 이하면 "바로 이어서 반복"
+    conf_adjacent: 0.85
+    conf_distant: 0.6
+    prefer_earlier_margin: 0.15   # 앞 테이크 점수가 이만큼 높아야 앞 테이크 선택
+    inner_pause_sec: 0.7
+    weights: {complete: 0.35, disfluency: 0.25, prob: 0.25, pause: 0.15}
+
+  offtalk:
+    conf: 0.6                  # 제작 대화 키워드는 후보만, 최종 판단은 대본 보고
+
+  reshoot:
+    clip_match_ratio: 0.6      # 다음 영상과 문장의 이 비율 이상이 겹치면 "통째로 다시 찍음" 후보
+    conf: 0.7
+
+  speaker:
+    word_dominance_db: 3       # 분리 녹음에서 단어마다 좌/우 중 이만큼 큰 쪽을 화자로
+
+  silence_common:
+    word_core_ratio: 0.25      # 받아쓴 단어의 가운데 부분(앞뒤 25% 제외)은 무음이어도 자르지 않음(작게 말한 말끝 보호)
+    long_gap_conf: 0.6
+    cut_conf: 0.95
+    ambient_word_overlap: 0.1
+    ambient_conf: 0.7
+
+  cut:
+    snap_window_sec: 0.08      # 컷 지점을 ±이 범위에서 가장 조용한 곳으로 이동
+    word_pad_sec: 0.02         # 단어 단위 컷 여유
+    min_cut_sec: 0.12          # 이보다 짧은 컷은 안 함(어색한 튐 방지)
+    min_keep_sec: 0.25         # 말이 없는 이보다 짧은 조각은 남기지 않음
+    next_sentence_join_sec: 3.0
+
+  markers:
+    max_name_chars: 40
+
+  youtube:
+    audio_format: "bestaudio[ext=m4a]/bestaudio"
+    sub_langs: "ko.*,ko"
+    scene_threshold: 0.3       # 화면 전환 감지 민감도(--video 옵션 쓸 때만)
+
+# ───────── 포맷별 ─────────
+
+narration:
+  silence:
+    threshold_ratio: 0.35      # 촘촘하게(숨소리 포함)
+    min_silence_sec: 0.35
+    pad_before_sec: 0.08
+    pad_after_sec: 0.12
+    trim_head_tail: true
+    speech_context_sec: null   # 말 사이 어디든 자름
+    max_cut_gap_sec: null
+    keep_think_pause_sec: 0
+    cut_breaths: true
+    breath_max_sec: 0.7
+    breath_peak_ratio: 0.6
+  ambient: {min_sec: 1.5, action: marker}
+  disfluency: {mode: cut}
+  retake: {mode: all, middle_penalty: 0, edge_sec: 0}
+  offtalk: {mode: cut}
+
+vlog:
+  silence:
+    threshold_ratio: 0.25
+    min_silence_sec: 0.5
+    pad_before_sec: 0.1
+    pad_after_sec: 0.15
+    trim_head_tail: false      # 말 없는 앞뒤 장면은 그대로
+    speech_context_sec: 6      # 앞뒤 6초 안에 말이 있는 "말하는 구간" 안에서만 무음 자름
+    max_cut_gap_sec: 4         # 이보다 긴 무음은 장면일 수 있어 자르지 않고 마커
+    keep_think_pause_sec: 0
+    cut_breaths: false
+    breath_max_sec: 0.7
+    breath_peak_ratio: 0.6
+  ambient: {min_sec: 1.5, action: keep}   # 요리·거리·파도 소리 보호
+  disfluency: {mode: cut}
+  retake: {mode: edges, edge_sec: 90, middle_penalty: 0.1}   # 오프닝·마무리 위주
+  offtalk: {mode: cut_keep_reactions}
+
+interview:
+  silence:
+    threshold_ratio: 0.2       # 느슨하게
+    min_silence_sec: 1.0
+    pad_before_sec: 0.15
+    pad_after_sec: 0.25
+    trim_head_tail: true
+    speech_context_sec: null
+    max_cut_gap_sec: null
+    keep_think_pause_sec: 0.6  # 답변 전 생각하는 멈춤 일부 유지
+    cut_breaths: false
+    breath_max_sec: 0.7
+    breath_peak_ratio: 0.6
+  ambient: {min_sec: 1.5, action: marker}
+  disfluency: {mode: by_speaker}   # 진행자: 자름 / 인터뷰이·모르는 화자: 마커만
+  retake: {mode: host_only, middle_penalty: 0, edge_sec: 0}   # 질문을 다시 한 경우 정도
+  offtalk: {mode: setup_only}
