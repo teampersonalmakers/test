@@ -55,7 +55,8 @@ cat > "${WS}/.claude/settings.json" <<JSON
       "Bash(${BIN}/fcp:*)",
       "Read(~/.local/share/fcp-autocut/**)",
       "Edit(~/.local/share/fcp-autocut/**)",
-      "Read(~/.claude/skills/fcp-autocut/**)"
+      "Read(~/.claude/skills/fcp-autocut/**)",
+      "Edit(~/.claude/skills/fcp-autocut/**)"
     ],
     "additionalDirectories": ["~/.local/share/fcp-autocut", "~/.claude/skills/fcp-autocut"]
   }

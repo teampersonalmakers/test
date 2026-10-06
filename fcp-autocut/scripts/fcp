@@ -5,6 +5,8 @@
 #   fcp open <파일.fcpxml> 파이널컷으로 열기
 #   fcp prefs [포맷]       지난번 포맷 보기/저장
 #   fcp setup [--check|--install|--youtube|--dev]
+#   fcp test               도구 검사(도구를 고친 뒤 반드시)
+#   fcp backup             도구를 고치기 전 현재 상태 보관
 HOME_DIR="${FCP_AUTOCUT_HOME:-$HOME/.local/share/fcp-autocut}"
 PY="${HOME_DIR}/venv/bin/python"
 S="$HOME/.claude/skills/fcp-autocut/scripts"
@@ -19,5 +21,9 @@ case "${cmd}" in
     if [[ -n "${1:-}" ]]; then mkdir -p "${HOME_DIR}"; print -r -- "{\"last_format\": \"$1\"}" > "${f}"; fi
     [[ -f "${f}" ]] && cat "${f}" || print '{}' ;;
   setup) exec zsh "${S}/setup.sh" "$@" ;;
-  *) print "사용: fcp prepare|probe|transcribe|analyze|view|build|learn|feedback|videos|open|prefs|setup ..."; exit 1 ;;
+  test) exec "${PY}" -m pytest "$HOME/.claude/skills/fcp-autocut/tests" -q -p no:cacheprovider "$@" ;;
+  backup)   # 도구를 고치기 전에 현재 상태를 보관(되돌리기용)
+    d="${HOME_DIR}/backup/$(date +%Y%m%d-%H%M%S)"; mkdir -p "${d}"
+    cp -R "$HOME/.claude/skills/fcp-autocut/." "${d}/" && print "${d}" ;;
+  *) print "사용: fcp prepare|probe|transcribe|analyze|view|build|learn|feedback|videos|open|prefs|setup|test|backup ..."; exit 1 ;;
 esac

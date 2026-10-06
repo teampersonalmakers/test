@@ -5,6 +5,13 @@ set -eu
 SRC="${0:A:h}/fcp-autocut"
 DST="${HOME}/.claude/skills/fcp-autocut"
 mkdir -p "${DST}"
+if [[ -f "${DST}/.local-modified" ]]; then
+  BK="${HOME}/.local/share/fcp-autocut/backup/before-reinstall-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "${BK}" && cp -R "${DST}/." "${BK}/"
+  print "⚠️ 맥에서 고친 도구가 있어 먼저 보관했어요: ${BK}"
+  print "   (가편집 대화에 '보관해 둔 수정 다시 적용해줘'라고 하면 새 버전에 옮겨 줘요)"
+  rm -f "${DST}/.local-modified"
+fi
 for d in scripts tests; do
   rm -rf "${DST}/${d}"
   cp -R "${SRC}/${d}" "${DST}/${d}"
