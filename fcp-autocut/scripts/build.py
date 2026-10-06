@@ -19,7 +19,7 @@ from xml.sax.saxutils import quoteattr
 
 import numpy as np
 
-from common import (FORMAT_KO, clip_envelope, die, fmt_time, ftime, load_json, load_presets,
+from common import (FORMAT_KO, clip_envelope, data_home, die, fmt_time, ftime, load_json, load_presets,
                     project_dir, save_json, to_frames_ceil, to_frames_floor)
 
 FCP_DTD_DIR = Path("/Applications/Final Cut Pro.app/Contents/Frameworks/Interchange.framework/Versions/A/Resources")
@@ -446,7 +446,18 @@ def main():
     # ── 리포트 ──
     report = make_report(args.title, fmt, probe, ctxs, per_clip, cursor * tl_fd, timeline, marker_rows, cj,
                          edits, notes, cands, cut_but_kept, tl_fd, name, version, overflow)
+    report, counts = report
     rep_path.write_text(report, encoding="utf-8")
+    # 편집 기록(피드백 학습용): 어떤 유형을 몇 개 잘랐는지 쌓아 둔다
+    from datetime import datetime
+    import json as _json
+    log = data_home() / "feedback" / "builds.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps({"date": datetime.now().isoformat(timespec="seconds"), "title": args.title, "format": fmt,
+                             "build": build_no, "orig_sec": round(sum(v["orig"] for v in per_clip.values()), 1),
+                             "result_sec": round(float(cursor * tl_fd), 1), "cuts": counts,
+                             "markers": len(marker_rows)}, ensure_ascii=False) + "\n")
     save_json(pdir / "last_build.json", {"xml": str(xml_path), "report": str(rep_path), "event": name,
                                          "orig_sec": sum(v["orig"] for v in per_clip.values()),
                                          "result_sec": float(cursor * tl_fd), "markers": len(marker_rows)})
@@ -574,7 +585,8 @@ def make_report(title, fmt, probe, ctxs, per_clip, total_tl, timeline, marker_ro
           "- 같은 파일을 다시 가져올 때 이벤트 이름이 겹치지 않도록 다시 만들 때마다 v2, v3이 붙어요. 이전 이벤트는 지워도 돼요.",
           "- 말끝이 살짝 먹힌 곳은 클립 끝의 오디오 페이드 핸들을 살짝 끌어 짧은 페이드를 주면 자연스러워요.",
           "- 🔴 할 일 마커는 타임라인 인덱스의 '태그' 목록에서 모아 볼 수 있어요.", ""]
-    return "\n".join(R)
+    counts = {"silence": tot_sil, **{ty: len(rows) for ty, rows in by_type.items()}}
+    return "\n".join(R), counts
 
 
 if __name__ == "__main__":

@@ -43,8 +43,17 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
+def my_presets_path() -> Path:
+    """피드백으로 배운 내 설정. 스킬을 다시 설치해도 지워지지 않는 곳에 둔다."""
+    return data_home() / "my_presets.yaml"
+
+
 def load_presets(fmt: str | None = None, path: Path | None = None) -> dict:
     raw = yaml.safe_load((path or CONFIG_DIR / "presets.yaml").read_text(encoding="utf-8"))
+    mine = my_presets_path()
+    if path is None and mine.exists():   # 기본값 위에 '내 설정'을 덮어씀(같은 구조: common / vlog / ...)
+        over = yaml.safe_load(mine.read_text(encoding="utf-8")) or {}
+        raw = _deep_merge(raw, over)
     common = raw["common"]
     if fmt is None:
         return common
@@ -54,9 +63,15 @@ def load_presets(fmt: str | None = None, path: Path | None = None) -> dict:
 
 
 def load_wordlist(name: str) -> list[str]:
-    p = CONFIG_DIR / name
-    if not p.exists():
-        return []
+    """기본 사전 + 내 사전(~/.local/share/fcp-autocut/my_<이름>, 피드백으로 추가한 단어)."""
+    out = []
+    for p in (CONFIG_DIR / name, data_home() / f"my_{name}"):
+        if p.exists():
+            out += _read_words(p)
+    return out
+
+
+def _read_words(p: Path) -> list[str]:
     out = []
     for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -66,19 +81,27 @@ def load_wordlist(name: str) -> list[str]:
 
 
 def load_sectioned(name: str) -> dict[str, list[str]]:
-    """[섹션] 헤더로 나뉜 사전 파일."""
+    """[섹션] 헤더로 나뉜 사전 파일. 내 사전(my_<이름>)이 있으면 합치고,
+    내 사전의 [빼기] 섹션 단어는 모든 섹션에서 제외(예: 자주 되살린 군말을 자르지 않게)."""
     sections: dict[str, list[str]] = {}
-    cur = "_"
-    for line in (CONFIG_DIR / name).read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+    remove: set[str] = set()
+    for p in (CONFIG_DIR / name, data_home() / f"my_{name}"):
+        if not p.exists():
             continue
-        m = re.fullmatch(r"\[(.+)\]", line)
-        if m:
-            cur = m.group(1)
-            continue
-        sections.setdefault(cur, []).append(line)
-    return sections
+        cur = "_"
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.fullmatch(r"\[(.+)\]", line)
+            if m:
+                cur = m.group(1)
+                continue
+            if cur == "빼기":
+                remove.add(line)
+            else:
+                sections.setdefault(cur, []).append(line)
+    return {k: [w for w in v if w not in remove] for k, v in sections.items()}
 
 
 # ───────── 텍스트 ─────────

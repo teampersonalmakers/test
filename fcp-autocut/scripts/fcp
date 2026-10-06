@@ -11,7 +11,7 @@ S="$HOME/.claude/skills/fcp-autocut/scripts"
 cmd="${1:-}"; shift 2>/dev/null
 case "${cmd}" in
   prepare) exec "${PY}" "${S}/autocut.py" "$@" ;;
-  probe|transcribe|analyze|view|build|learn) exec "${PY}" "${S}/${cmd}.py" "$@" ;;
+  probe|transcribe|analyze|view|build|learn|feedback) exec "${PY}" "${S}/${cmd}.py" "$@" ;;
   videos) find "${1:-.}" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' \) ! -name '._*' | sort ;;
   open) exec open -a "Final Cut Pro" "$@" ;;
   prefs)
@@ -19,5 +19,5 @@ case "${cmd}" in
     if [[ -n "${1:-}" ]]; then mkdir -p "${HOME_DIR}"; print -r -- "{\"last_format\": \"$1\"}" > "${f}"; fi
     [[ -f "${f}" ]] && cat "${f}" || print '{}' ;;
   setup) exec zsh "${S}/setup.sh" "$@" ;;
-  *) print "사용: fcp prepare|probe|transcribe|analyze|view|build|learn|videos|open|prefs|setup ..."; exit 1 ;;
+  *) print "사용: fcp prepare|probe|transcribe|analyze|view|build|learn|feedback|videos|open|prefs|setup ..."; exit 1 ;;
 esac
