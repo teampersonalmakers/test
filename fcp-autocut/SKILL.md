@@ -48,8 +48,11 @@ description: 파이널컷 프로 자동 가편집. 영상 파일 경로를 받�
 - **제목**: 묻지 않는다. 첫 영상의 폴더 이름(폴더가 "Downloads"·"Desktop"·"Movies"처럼 일반적이면 첫 파일 이름)으로
   정하고 결과 보고 때 알린다.
 - **영상 목록과 순서**: 사용자가 준(끌어다 놓은) 정확한 경로 그대로 쓴다. 파일 번호로 추측(glob)하지 않는다.
-  폴더만 줬다면 그 폴더의 `.MP4`/`.MOV`만 이름순으로 쓰고(포켓3의 `.LRF`·`.THM`·사진 제외) 목록을 한 줄로 알린 뒤 진행.
-  순서를 안 정했으면 `--sort-name`을 쓰고 "파일 이름순(촬영순)으로 이어 붙였어요"라고 알린다.
+  **폴더를 주면 폴더 경로를 그대로 `--init`에 넣고 `--sort-time`**(영상에 기록된 촬영 시각순)을 쓴다. `.MP4`/`.MOV`만
+  자동으로 고르고(.LRF·.THM·사진 제외), 읽을 수 없는(복사 덜 됨·깨진) 파일은 빼고 진행한다. 파일 이름은 촬영 순서가
+  아닐 수 있으니 이름순(`--sort-name`)은 사용자가 원할 때만. 시작 전에 "영상 N개, 합계 ○분, 촬영 시각순, 받아쓰기 약 ○분"을
+  한 줄로 알리고 바로 진행한다. 빠진 파일·복사본 경고가 있으면 함께 알린다.
+  파일을 하나씩 준 경우엔 준 순서 그대로(사용자가 순서를 신경 쓰지 않았으면 `--sort-time`).
 - **받아쓰기 모델·설치 동의**처럼 꼭 필요한 것만 묻는다.
 - **내 스타일 불러오기(매번)**: `~/.local/share/fcp-autocut/편집취향.md`가 있으면 먼저 읽고 그 규칙을 이번 판단에
   그대로 적용한다. `~/.local/share/fcp-autocut/bin/fcp feedback summary --format <포맷>`도 실행해 최근 되살림 경향을 확인한다
@@ -59,7 +62,7 @@ description: 파이널컷 프로 자동 가편집. 영상 파일 경로를 받�
 
 ### 2~4. 준비 한 번에 (권장)
 ```zsh
-~/.local/share/fcp-autocut/bin/fcp prepare --title "${T}" --format vlog --init "/경로/A.MP4" "/경로/B.MP4"   # [--sort-name]
+~/.local/share/fcp-autocut/bin/fcp prepare --title "${T}" --format vlog --init "/경로/폴더" --sort-time   # 또는 파일 경로 여러 개
 ```
 영상 확인 → 받아쓰기 → 후보 계산 → 초안까지 한 번에 하고 `PREPARE_DONE`을 출력한다. 이미 끝난 단계는
 건너뛰므로 중간에 멈춰도 같은 명령(두 번째부터는 `--init` 없이)으로 이어서 실행하면 된다.
@@ -68,7 +71,7 @@ description: 파이널컷 프로 자동 가편집. 영상 파일 경로를 받�
 
 ### 2. 영상 확인
 ```zsh
-~/.local/share/fcp-autocut/bin/fcp probe --title "${T}" --format vlog --init "/경로/A.MP4" "/경로/B.MP4"   # [--sort-name]
+~/.local/share/fcp-autocut/bin/fcp probe --title "${T}" --format vlog --init "/경로/폴더" --sort-time   # 또는 파일 경로 여러 개
 ```
 채널 판단 결과(모노 / 좌우 분리 / 한쪽만)를 근거 수치와 함께 한두 줄로 보고한다.
 **인터뷰 + 좌우 분리**면 어느 쪽이 진행자인지 묻거나 대본을 보고 추정해 확인받은 뒤

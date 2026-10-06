@@ -86,3 +86,22 @@ def test_audio_decoded_once_and_focus_view(tmp_path, proj, dtd):
     assert list((p.dir / "cache").glob("*.npz")) == caches  # 분석·생성 단계에서 새로 디코딩하지 않음
     out = p.run("view.py", "--focus").stdout
     assert "[1]" in out and "군말" in out
+
+
+def test_folder_input_shot_time_order_and_broken_file(tmp_path, proj):
+    import subprocess
+    d = tmp_path / "T7 Shield" / "발리 5"
+    d.mkdir(parents=True)
+    for name, t in [("ZZZ0001", "2026-08-08T01:00:00Z"), ("AAA0002", "2026-08-08T03:00:00Z"),
+                    ("MMM0003", "2026-08-08T02:00:00Z")]:
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30000/1001",
+                        "-f", "lavfi", "-i", "sine=f=220:sample_rate=48000", "-t", "2", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-c:a", "aac", "-metadata", f"creation_time={t}", str(d / f"{name}.MP4")],
+                       check=True)
+    (d / "BROKEN.MP4").write_bytes(b"\0" * 4000)     # 복사가 덜 된 파일
+    (d / "ZZZ0001.LRF").write_bytes(b"\0" * 10)       # 포켓3 저화질 사본
+    p = proj()
+    r = p.run("probe.py", "--format", "vlog", "--init", str(d), "--sort-time")
+    order = [x.split("/")[-1] for x in (p.dir / "batch.txt").read_text(encoding="utf-8").split()]
+    assert order == ["ZZZ0001.MP4", "MMM0003.MP4", "AAA0002.MP4"]
+    assert "BROKEN.MP4" in r.stdout and "촬영 시각순" in r.stdout

@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--format", required=True)
     ap.add_argument("--init", nargs="+")
     ap.add_argument("--sort-name", action="store_true")
+    ap.add_argument("--sort-time", action="store_true")
     ap.add_argument("--out-dir")
     ap.add_argument("--allow-download", action="store_true")
     a = ap.parse_args()
@@ -36,6 +37,8 @@ def main():
         probe += ["--init", *a.init]
     if a.sort_name:
         probe.append("--sort-name")
+    if a.sort_time:
+        probe.append("--sort-time")
     if a.out_dir:
         probe += ["--out-dir", a.out_dir]
     step("probe.py", *probe)

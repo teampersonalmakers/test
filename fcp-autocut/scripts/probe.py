@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import unicodedata
 from datetime import datetime
@@ -22,12 +23,34 @@ from common import (FORMAT_KO, clip_ids, die, envelope, ffmpeg_pcm, file_signatu
                     save_json, timecode_to_frames)
 
 
-def ffprobe(p: Path) -> dict:
+def ffprobe(p: Path, quiet: bool = False) -> dict | None:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(p)],
                        capture_output=True)
-    if r.returncode != 0:
+    ok = r.returncode == 0
+    info = json.loads(r.stdout) if ok and r.stdout else None
+    if ok and info and not any(s.get("codec_type") == "video" for s in info.get("streams", [])):
+        ok = False
+    if not ok:
+        if quiet:
+            return None
         die(f"영상 정보를 읽지 못했어요: {p}\n{r.stderr.decode(errors='ignore')[-300:]}")
-    return json.loads(r.stdout)
+    return info
+
+
+def shot_time(p: Path, info: dict) -> tuple[float, str]:
+    """촬영 시각: 영상에 기록된 creation_time → 없으면 파일 수정 시각."""
+    from datetime import datetime as _dt
+    tags = dict((info.get("format") or {}).get("tags") or {})
+    for st in info.get("streams", []):
+        for k, v in (st.get("tags") or {}).items():
+            tags.setdefault(k, v)
+    ct = tags.get("creation_time") or tags.get("com.apple.quicktime.creationdate")
+    if ct:
+        try:
+            return _dt.fromisoformat(ct.replace("Z", "+00:00")).timestamp(), "촬영 시각"
+        except ValueError:
+            pass
+    return p.stat().st_mtime, "파일 수정 시각"
 
 
 def rotation_of(v: dict) -> int:
@@ -151,6 +174,7 @@ def main():
     ap.add_argument("--format", required=True)
     ap.add_argument("--init", nargs="+", help="영상 경로들(준 순서 그대로)")
     ap.add_argument("--sort-name", action="store_true")
+    ap.add_argument("--sort-time", action="store_true", help="영상에 기록된 촬영 시각순(폴더째 줄 때 기본)")
     ap.add_argument("--out-dir", help="결과 저장 폴더(기본: 첫 영상 폴더)")
     args = ap.parse_args()
     cfg = load_presets(args.format)
@@ -158,18 +182,42 @@ def main():
     pdir.mkdir(parents=True, exist_ok=True)
 
     if args.init:
-        paths = [resolve_path(x) for x in args.init]
-        if args.sort_name:
-            paths.sort(key=lambda x: unicodedata.normalize("NFC", x.name))
+        paths = []
+        for x in args.init:   # 폴더를 주면 그 안의 영상(.MP4/.MOV)을 모두
+            px = resolve_path(x)
+            if px.is_dir():
+                paths += [f for f in px.iterdir() if f.is_file() and f.suffix.lower() in (".mp4", ".mov")
+                          and not f.name.startswith("._")]
+            else:
+                paths.append(px)
         missing = [str(x) for x in paths if not x.is_file()]
         if missing:
             die("이 파일을 찾지 못했어요:\n  " + "\n  ".join(missing))
-        dup = {str(x) for x in paths if paths.count(x) > 1}
-        if dup:
-            die("같은 파일이 두 번 들어 있어요:\n  " + "\n  ".join(dup))
+        seen = set()
+        paths = [x for x in paths if not (str(x) in seen or seen.add(str(x)))]   # 같은 파일 중복 제거
+        skipped, infos = [], {}
+        for x in list(paths):   # 읽을 수 없는(복사 덜 됨·깨진) 파일은 빼고 진행
+            info = ffprobe(x, quiet=True)
+            if info is None:
+                skipped.append(x.name)
+                paths.remove(x)
+            else:
+                infos[str(x)] = info
+        if not paths:
+            die("읽을 수 있는 영상이 없어요.")
+        if args.sort_name:
+            paths.sort(key=lambda x: unicodedata.normalize("NFC", x.name))
+            order = "파일 이름순"
+        elif args.sort_time:
+            times = {str(x): shot_time(x, infos[str(x)]) for x in paths}
+            paths.sort(key=lambda x: (times[str(x)][0], x.name))
+            srcs = {v[1] for v in times.values()}
+            order = "촬영 시각순" if srcs == {"촬영 시각"} else "촬영 시각순(일부는 파일 수정 시각 기준)"
+        else:
+            order = "지정한 순서"
         (pdir / "batch.txt").write_text("\n".join(str(x) for x in paths) + "\n", encoding="utf-8")
         proj = {"title": args.title, "format": args.format, "created": datetime.now().isoformat(timespec="seconds"),
-                "order": "이름순" if args.sort_name else "지정한 순서",
+                "order": order, "skipped": skipped,
                 "out_dir": args.out_dir or str(paths[0].parent)}
         save_json(pdir / "project.json", proj)
     proj = load_json(pdir / "project.json")
@@ -191,6 +239,12 @@ def main():
     tl = {k: first[k] for k in ("width", "height", "fps", "frame_duration")}
     tl["audio_rate"] = (first["audio"] or {}).get("rate", 48000)
     warnings = []
+    stems = {Path(c["path"]).stem for c in clips}
+    for c in clips:   # Finder 복사본("이름 1.MP4")일 수 있는 파일
+        m = re.fullmatch(r"(.+) \d+", Path(c["path"]).stem)
+        if m and m.group(1) in stems:
+            warnings.append(f"{c['id']}: '{m.group(1)}'의 복사본일 수 있어요. 같은 영상이면 하나만 남기는 게 좋아요"
+                            "(내용이 같으면 '통째로 다시 찍은 영상'으로 자동 판단해요).")
     for c in clips[1:]:
         if c["fps"] != first["fps"]:
             warnings.append(f"{c['id']}: 프레임레이트가 첫 영상과 달라요({c['fps']} ≠ {first['fps']}). 파이널컷이 자동으로 맞춰요.")
@@ -212,6 +266,8 @@ def main():
     for w in warnings:
         print(f"  ⚠️ {w}")
     print(f"⏱ 전체 길이: {int(total // 60)}분 {int(total % 60)}초")
+    for name in proj.get("skipped", []):
+        print(f"  ⚠️ {name}: 영상을 읽을 수 없어 뺐어요(복사가 덜 됐거나 깨진 파일일 수 있어요).")
     print(f"PROJECT_DIR={pdir}")
 
 
